@@ -1,4 +1,4 @@
-langchain
-langchain-openai
-faiss-cpu
-pydantic
+langchain==0.2.0
+langchain-openai==0.1.0
+faiss-cpu==1.7.4
+pydantic==2.6.0
