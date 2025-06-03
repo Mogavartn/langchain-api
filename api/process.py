@@ -5,10 +5,13 @@ from langchain.vectorstores import FAISS
 from langchain.text_splitter import CharacterTextSplitter
 import json
 
-os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY", "ta-clé-api-openai")
+# Récupération de la clé API depuis une variable d’environnement
+os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
 
+# Initialisation de la mémoire (stockée en mémoire temporaire, non persistante)
 memory_store = {}
 
+# Données des blocs (remplace par ton JSON complet)
 blocs = [
     {"id": "legalite_programme", "response": "On ne peut pas inscrire une personne dans une formation si son but est d'être rémunérée pour ça. En revanche, si tu fais la formation sérieusement, tu peux ensuite participer au programme d'affiliation et parrainer d'autres personnes."},
     {"id": "sans_reseaux_sociaux", "response": "Pas de souci si tu n'es pas sur Insta ou Snap 😌 Tu peux simplement nous envoyer des contacts potentiellement intéressés. Ça fonctionne très bien aussi 😉"},
@@ -16,6 +19,7 @@ blocs = [
     # Ajoute tous tes blocs ici
 ]
 
+# Création d'un vector store pour la recherche sémantique (initialisé une seule fois)
 texts = [bloc["response"] for bloc in blocs]
 embeddings = OpenAIEmbeddings()
 text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=0)
