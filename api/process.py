@@ -154,7 +154,6 @@ blocs_data = {
             "id": "transmission_contacts_requis",
             "response": "Tu peux nous envoyer le nom, prénom, et un contact (téléphone ou email). Si tu as aussi leur SIRET, c'est top 😉 (ça nous aide pour les pros). Pas grave sinon, on fera sans."
         },
-        # Sous-blocs du bloc F (paiement_formation)
         "cpf_bloque": {
             "id": "cpf_bloque",
             "response": "Ce dossier fait partie des quelques cas bloqués depuis la réforme CPF de février 2025.\n\n✅ Tous les éléments nécessaires ont bien été transmis à l'organisme de contrôle 📄 🔍\n❌ Mais la Caisse des Dépôts met souvent plusieurs semaines (parfois jusqu'à 2 mois) pour redemander un document après en avoir reçu un autre.\n\n👉 On accompagne au maximum le centre de formation pour que tout rentre dans l'ordre.\n🙏 On est aussi impactés financièrement, car chaque formation a un coût pour nous.\n\n💪 On garde confiance et on espère une issue favorable très bientôt.\n🗣 Et on s'engage à revenir vers toi dès qu'on a du nouveau. Merci pour ta patience 🙏"
@@ -204,22 +203,38 @@ def detect_payment_issue(message):
         "une attente d'argent", "plainte sur non-versement", "retard de paiement",
         "promesse non tenue", "pas encore payé", "virement en retard",
         "je vais être payé quand", "ça fait 20 jours j'aurais dû être payé",
-        "toujours pas reçu virement", "retard paiement formation"
+        "toujours pas reçu virement", "retard paiement formation",
+        "récupérer l'argent", "récupérer mon argent", "je veux mon argent",
+        "où est mon argent", "argent pas reçu", "rembourser mon cpf",
+        "je veux être payé", "paiement en attente", "problème de paiement"
     ]
     
     message_lower = message.lower()
+    
+    # Vérifie les mots-clés exacts
     for keyword in payment_keywords:
         if keyword in message_lower:
             return True
+    
+    # Vérifie des combinaisons (ex. : "argent" + "cpf")
+    if "argent" in message_lower and "cpf" in message_lower:
+        return True
+    
     return False
 
 # Fonction pour analyser le contexte et choisir le bon sous-bloc
 def get_contextualized_response(user_message, matched_bloc):
+    message_lower = user_message.lower()
+    
+    # Vérifie d'abord les intentions de légalité liées à "récupérer l'argent" sur CPF
+    if "cpf" in message_lower and any(keyword in message_lower for keyword in ["récupérer l'argent", "récupérer mon argent", "je veux mon argent"]):
+        return {
+            "matched_bloc_response": blocs_data["blocs_complementaires"]["legalite_programme"]["response"],
+            "escalade_required": False
+        }
+    
     if matched_bloc["id"] == "paiement_formation":
         # Logique pour les sous-blocs du paiement
-        message_lower = user_message.lower()
-        
-        # Vérification des mots-clés pour différents cas
         if any(keyword in message_lower for keyword in ["cpf", "compte personnel"]):
             return {
                 "matched_bloc_response": blocs_data["blocs_complementaires"]["filtrage_cpf_bloque"]["response"],
