@@ -1,27 +1,27 @@
-    import os
-    from fastapi import FastAPI, HTTPException, Request
-    from langchain.memory import ConversationBufferMemory
-    from langchain.embeddings import OpenAIEmbeddings
-    from langchain.vectorstores import FAISS
-    from langchain.text_splitter import CharacterTextSplitter
-    import json
-    import logging
+import os
+from fastapi import FastAPI, HTTPException, Request
+from langchain.memory import ConversationBufferMemory
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.vectorstores import FAISS
+from langchain.text_splitter import CharacterTextSplitter
+import json
+import logging
 
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-    app = FastAPI()
+app = FastAPI()
 
     # Récupération de la clé API depuis une variable d’environnement
-    os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
-    if not os.environ.get("OPENAI_API_KEY"):
+os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
+if not os.environ.get("OPENAI_API_KEY"):
         raise ValueError("OPENAI_API_KEY is not set in environment variables")
 
     # Initialisation de la mémoire (stockée en mémoire temporaire, non persistante)
-    memory_store = {}
+memory_store = {}
 
     # Base de données complète extraite du JSON
-    blocs_data = {
+blocs_data = {
         "meta": {
             "version": "8.0",
             "description": "Base de données complète IA WhatsApp - JAK Company x WeiWei",
@@ -175,8 +175,8 @@
     }
 
     # Extraire tous les blocs avec une réponse
-    blocs = []
-    for category in ["blocs_reponses", "blocs_escalade", "blocs_complementaires", "regles_comportementales"]:
+blocs = []
+for category in ["blocs_reponses", "blocs_escalade", "blocs_complementaires", "regles_comportementales"]:
         if category in blocs_data:
             for bloc_id, bloc_data in blocs_data[category].items():
                 if "response" in bloc_data:
@@ -187,17 +187,17 @@
                     })
 
     # Initialisation du vector store (lazy-loaded dans la fonction)
-    def initialize_vector_store():
+def initialize_vector_store():
         texts = [bloc["response"] for bloc in blocs]
         embeddings = OpenAIEmbeddings()
         text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=0)
         docs = text_splitter.create_documents(texts)
         return FAISS.from_documents(docs, embeddings)
 
-    vector_store = initialize_vector_store()
+vector_store = initialize_vector_store()
 
     # Fonction pour détecter les problèmes de paiement (priorité absolue)
-    def detect_payment_issue(message):
+def detect_payment_issue(message):
         payment_keywords = [
             "j'ai pas été payé", "toujours rien reçu", "je devais avoir un virement",
             "on m'a dit que j'allais être payé", "ça fait 3 mois j'attends",
@@ -214,7 +214,7 @@
         return False
 
     # Fonction pour analyser le contexte et choisir le bon sous-bloc
-    def get_contextualized_response(user_message, matched_bloc):
+def get_contextualized_response(user_message, matched_bloc):
         if matched_bloc["id"] == "paiement_formation":
             # Logique pour les sous-blocs du paiement
             message_lower = user_message.lower()
@@ -237,8 +237,8 @@
             "escalade_required": False
         }
 
-    @app.post("/")
-    async def process_message(request: Request):
+@app.post("/")
+async def process_message(request: Request):
         try:
             body = await request.json()
             user_message = body.get("message_original", "")
@@ -328,8 +328,8 @@
             raise HTTPException(status_code=500, detail=str(e))
 
     # Endpoint pour obtenir la liste des blocs disponibles
-    @app.get("/blocs")
-    async def get_blocs():
+@app.get("/blocs")
+async def get_blocs():
         return {
             "total_blocs": len(blocs),
             "blocs": [{"id": bloc["id"], "category": bloc["category"]} for bloc in blocs],
@@ -337,8 +337,8 @@
         }
 
     # Endpoint pour tester un message spécifique
-    @app.post("/test")
-    async def test_message(request: Request):
+@app.post("/test")
+async def test_message(request: Request):
         try:
             body = await request.json()
             test_message = body.get("message", "")
@@ -370,6 +370,6 @@
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-    if __name__ == "__main__":
+if __name__ == "__main__":
         import uvicorn
         uvicorn.run(app, host="0.0.0.0", port=8000)
