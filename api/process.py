@@ -206,7 +206,9 @@ def detect_payment_issue(message):
         "toujours pas reçu virement", "retard paiement formation",
         "récupérer l'argent", "récupérer mon argent", "je veux mon argent",
         "où est mon argent", "argent pas reçu", "rembourser mon cpf",
-        "je veux être payé", "paiement en attente", "problème de paiement"
+        "je veux être payé", "paiement en attente", "problème de paiement",
+        "où en est mon paiement", "savoir où en est mon paiement",
+        "statut de mon paiement", "paiement en cours", "suivi de paiement"
     ]
     
     message_lower = message.lower()
@@ -216,8 +218,8 @@ def detect_payment_issue(message):
         if keyword in message_lower:
             return True
     
-    # Vérifie des combinaisons (ex. : "argent" + "cpf")
-    if "argent" in message_lower and "cpf" in message_lower:
+    # Vérifie des combinaisons (ex. : "paiement" + "où")
+    if "paiement" in message_lower and any(word in message_lower for word in ["où", "ou", "savoir", "statut", "suivi"]):
         return True
     
     return False
@@ -272,6 +274,10 @@ async def process_message(request: Request):
             memory_store[wa_id] = ConversationBufferMemory()
         
         memory = memory_store[wa_id]
+        
+        # Réinitialise la mémoire si c'est une nouvelle demande de paiement
+        if detect_payment_issue(user_message) and "paiement" in user_message.lower():
+            memory.clear()  # Reset pour éviter les biais du contexte précédent
         
         # Ajout du message utilisateur à la mémoire
         memory.chat_memory.add_user_message(user_message)
