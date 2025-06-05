@@ -246,6 +246,11 @@ def get_contextualized_response(user_message, matched_bloc):
                 "escalade_required": True,
                 "escalade_type": "admin"
             }
+        # Par défaut, pose les questions obligatoires
+        return {
+            "matched_bloc_response": matched_bloc["response"],
+            "escalade_required": False
+        }
     
     return {
         "matched_bloc_response": matched_bloc["response"],
@@ -259,6 +264,8 @@ async def process_message(request: Request):
         user_message = body.get("message_original", "")
         matched_bloc_response = body.get("matched_bloc_response", "")
         wa_id = body.get("wa_id", "")
+        
+        logger.info(f"Processing message: {user_message}, wa_id: {wa_id}, matched_bloc_response: {matched_bloc_response}")
         
         # Initialisation de la mémoire pour cet utilisateur
         if wa_id not in memory_store:
@@ -283,17 +290,14 @@ async def process_message(request: Request):
             if payment_bloc:
                 contextualized = get_contextualized_response(user_message, payment_bloc)
                 memory.chat_memory.add_ai_message(contextualized["matched_bloc_response"])
-                
                 response = {
                     "matched_bloc_response": contextualized["matched_bloc_response"],
                     "memory": memory.load_memory_variables({})["history"],
                     "priority_detection": "PAYMENT_ISSUE"
                 }
-                
                 if contextualized.get("escalade_required"):
                     response["escalade_required"] = True
                     response["escalade_type"] = contextualized.get("escalade_type", "admin")
-                
                 return response
         
         # Recherche sémantique pour trouver un bloc pertinent
@@ -304,7 +308,7 @@ async def process_message(request: Request):
         for doc, score in similar_docs_with_scores:
             for bloc in blocs:
                 if bloc["response"] == doc.page_content:
-                    if score < best_score:  # Plus le score est petit, plus la correspondance est bonne
+                    if score < best_score:
                         best_score = score
                         best_match = bloc
                     break
@@ -312,24 +316,20 @@ async def process_message(request: Request):
         if best_match:
             contextualized = get_contextualized_response(user_message, best_match)
             memory.chat_memory.add_ai_message(contextualized["matched_bloc_response"])
-            
             response = {
                 "matched_bloc_response": contextualized["matched_bloc_response"],
                 "memory": memory.load_memory_variables({})["history"],
                 "bloc_id": best_match["id"],
                 "bloc_category": best_match["category"]
             }
-            
             if contextualized.get("escalade_required"):
                 response["escalade_required"] = True
                 response["escalade_type"] = contextualized.get("escalade_type", "admin")
-            
             return response
         
         # Si rien n'est trouvé, escalade par défaut
         escalade_response = "Je vais faire suivre à la bonne personne dans l'équipe 😊 Notre équipe est disponible du lundi au vendredi, de 9h à 17h (hors pause déjeuner)."
         memory.chat_memory.add_ai_message(escalade_response)
-        
         return {
             "matched_bloc_response": escalade_response,
             "memory": memory.load_memory_variables({})["history"],
