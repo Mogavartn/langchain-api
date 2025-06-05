@@ -121,6 +121,10 @@ blocs_data = {
         "bloc_J": {
             "id": "delai_global",
             "response": "Bonne question 👇\n\nEn moyenne, il faut compter entre 3 et 6 mois ⏳\n\nÇa dépend surtout :\n✅ du type de financement (CPF, OPCO, entreprise directe)\n✅ de la réactivité du contact (émargements, validation, etc.)\n✅ du temps de traitement de l'organisme de financement\n\n📌 Exemple :\nSi c'est une entreprise qui paie directement → paiement en 7 jours après la formation\nSi c'est un dossier CPF → il faut souvent attendre 45 jours mini après les signatures\nPour les OPCO → c'est en moyenne 2 mois, parfois plus\n\n🧠 C'est pour ça qu'on te conseille d'envoyer plusieurs contacts au début → pour que les paiements s'enchaînent ensuite 🔁\nEt nous, on gère tout le suivi administratif entre temps 👌"
+        },
+        "bloc_K": {
+            "id": "formations_proposees",
+            "response": "Salut 👋\nOn propose plein de formations cool adaptées à tes besoins 😊\nVoici quelques exemples :\n- Bureautique (Excel, Word, etc.)\n- Vente et négociation\n- Langues (anglais, espagnol, etc.)\n- Gestion de projet\n\nElles peuvent être financées via CPF, OPCO ou directement par une entreprise 💸\nTu veux en savoir plus sur une formation en particulier ? Ou je peux t’aider à voir ce qui te correspond ? 📚"
         }
     },
     "blocs_escalade": {
@@ -310,11 +314,12 @@ async def process_message(request: Request):
         similar_docs_with_scores = vector_store.similarity_search_with_score(user_message, k=3)
         best_match = None
         best_score = float('inf')  # Initialisation à +inf pour comparer les scores (plus petit = plus similaire)
+        min_score_threshold = 0.3  # Seuil pour rejeter les matchs trop faibles
 
         for doc, score in similar_docs_with_scores:
             for bloc in blocs:
                 if bloc["response"] == doc.page_content:
-                    if score < best_score:
+                    if score < best_score and score < min_score_threshold:
                         best_score = score
                         best_match = bloc
                     break
@@ -333,7 +338,7 @@ async def process_message(request: Request):
                 response["escalade_type"] = contextualized.get("escalade_type", "admin")
             return response
         
-        # Si rien n'est trouvé, escalade par défaut
+        # Si rien n'est trouvé ou score trop faible, escalade par défaut
         escalade_response = "Je vais faire suivre à la bonne personne dans l'équipe 😊 Notre équipe est disponible du lundi au vendredi, de 9h à 17h (hors pause déjeuner)."
         memory.chat_memory.add_ai_message(escalade_response)
         return {
@@ -376,7 +381,8 @@ async def test_message(request: Request):
                     matches.append({
                         "bloc_id": bloc["id"],
                         "category": bloc["category"],
-                        "response_preview": bloc["response"][:100] + "..."
+                        "response_preview": bloc["response"][:100] + "...",
+                        "score": score
                     })
                     break
         
