@@ -130,13 +130,6 @@ blocs_data = {
     "blocs_escalade": {
         "escalade_agent_admin": {
             "id": "escalade_agent_admin",
-            "declencheurs": [
-                "paiement",
-                "preuve de virement",
-                "fichier ou échéance",
-                "retard anormal",
-                "vérification dossier"
-            ],
             "response": "🔁 ESCALADE AGENT ADMIN\n\n📅 Rappel :\n\"Notre équipe traite les demandes du lundi au vendredi, de 9h à 17h (hors pause déjeuner).\nNous te répondrons dès que possible.\"\n\n🕐 Notre équipe traite les demandes du lundi au vendredi, de 9h à 17h (hors pause déjeuner).\nOn te tiendra informé dès qu'on a du nouveau ✅"
         },
         "escalade_agent_co": {
@@ -206,7 +199,7 @@ def initialize_vector_store():
 
 vector_store = initialize_vector_store()
 
-# Fonction pour détecter les problèmes de paiement (priorité absolue sauf escalade)
+# Fonction pour détecter les problèmes de paiement (priorité absolue)
 def detect_payment_issue(message):
     payment_keywords = [
         "j'ai pas été payé", "toujours rien reçu", "je devais avoir un virement",
@@ -234,15 +227,6 @@ def detect_payment_issue(message):
         return True
     
     return False
-
-# Fonction pour détecter les déclencheurs d'escalade (priorité absolue)
-def detect_escalade_trigger(message):
-    escalade_triggers = blocs_data["blocs_escalade"]["escalade_agent_admin"]["declencheurs"]
-    message_lower = message.lower()
-    logger.info(f"Checking escalade triggers for message: {message_lower}, triggers: {escalade_triggers}")
-    result = any(trigger in message_lower for trigger in escalade_triggers)
-    logger.info(f"Escalade trigger detected: {result}")
-    return result
 
 # Fonction pour analyser le contexte et choisir le bon sous-bloc
 def get_contextualized_response(user_message, matched_bloc):
@@ -283,7 +267,7 @@ def get_contextualized_response(user_message, matched_bloc):
 async def process_message(request: Request):
     try:
         body = await request.json()
-        user_message = body.get("message_original", body.get("message", ""))
+        user_message = body.get("message_original", "")
         matched_bloc_response = body.get("matched_bloc_response", "")
         wa_id = body.get("wa_id", "")
         
@@ -292,17 +276,12 @@ async def process_message(request: Request):
         # Initialisation de la mémoire pour cet utilisateur
         if wa_id not in memory_store:
             memory_store[wa_id] = ConversationBufferMemory()
-            logger.info(f"New memory initialized for wa_id: {wa_id}")
-        else:
-            logger.info(f"Existing memory found for wa_id: {wa_id}, memory size: {len(memory_store[wa_id].chat_memory.messages)}")
         
         memory = memory_store[wa_id]
         
-        # Réinitialise la mémoire si une intention de paiement ou escalade est détectée
-        if detect_payment_issue(user_message) or detect_escalade_trigger(user_message):
-            logger.info(f"Clearing memory for wa_id: {wa_id} due to payment or escalade trigger")
-            memory.clear()
-            logger.info(f"Memory cleared, new size: {len(memory.chat_memory.messages)}")
+        # Réinitialise la mémoire si c'est une nouvelle demande de paiement
+        if detect_payment_issue(user_message) and "paiement" in user_message.lower():
+            memory.clear()  # Reset pour éviter les biais du contexte précédent
         
         # Ajout du message utilisateur à la mémoire
         memory.chat_memory.add_user_message(user_message)
@@ -310,28 +289,13 @@ async def process_message(request: Request):
         # Si un bloc a déjà été trouvé, le retourner
         if matched_bloc_response:
             memory.chat_memory.add_ai_message(matched_bloc_response)
-            logger.info(f"Returning matched_bloc_response: {matched_bloc_response}")
             return {
                 "matched_bloc_response": matched_bloc_response,
                 "memory": memory.load_memory_variables({})["history"]
             }
         
-        # Détection prioritaire des déclencheurs d'escalade
-        if detect_escalade_trigger(user_message):
-            logger.info("Escalade trigger detected, returning escalade_agent_admin")
-            escalade_bloc = next((bloc for bloc in blocs if bloc["id"] == "escalade_agent_admin"), None)
-            if escalade_bloc:
-                memory.chat_memory.add_ai_message(escalade_bloc["response"])
-                return {
-                    "matched_bloc_response": escalade_bloc["response"],
-                    "memory": memory.load_memory_variables({})["history"],
-                    "escalade_required": True,
-                    "escalade_type": "admin"
-                }
-        
-        # Détection des problèmes de paiement (seulement si pas d'escalade)
+        # Détection prioritaire des problèmes de paiement
         if detect_payment_issue(user_message):
-            logger.info("Payment issue detected, processing payment_bloc")
             payment_bloc = next((bloc for bloc in blocs if bloc["id"] == "paiement_formation"), None)
             if payment_bloc:
                 contextualized = get_contextualized_response(user_message, payment_bloc)
@@ -349,8 +313,8 @@ async def process_message(request: Request):
         # Recherche sémantique pour trouver un bloc pertinent
         similar_docs_with_scores = vector_store.similarity_search_with_score(user_message, k=3)
         best_match = None
-        best_score = float('inf')
-        min_score_threshold = 0.3
+        best_score = float('inf')  # Initialisation à +inf pour comparer les scores (plus petit = plus similaire)
+        min_score_threshold = 0.3  # Seuil pour rejeter les matchs trop faibles
 
         for doc, score in similar_docs_with_scores:
             for bloc in blocs:
@@ -361,7 +325,6 @@ async def process_message(request: Request):
                     break
         
         if best_match:
-            logger.info(f"Best match found: {best_match['id']}")
             contextualized = get_contextualized_response(user_message, best_match)
             memory.chat_memory.add_ai_message(contextualized["matched_bloc_response"])
             response = {
@@ -376,7 +339,6 @@ async def process_message(request: Request):
             return response
         
         # Si rien n'est trouvé ou score trop faible, escalade par défaut
-        logger.info("No match found, returning default escalade")
         escalade_response = "Je vais faire suivre à la bonne personne dans l'équipe 😊 Notre équipe est disponible du lundi au vendredi, de 9h à 17h (hors pause déjeuner)."
         memory.chat_memory.add_ai_message(escalade_response)
         return {
@@ -388,30 +350,6 @@ async def process_message(request: Request):
         
     except Exception as e:
         logger.error(f"Error processing message: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/clear_memory")
-async def clear_memory(request: Request):
-    try:
-        body = await request.json()
-        wa_id = body.get("wa_id", "")
-        if wa_id in memory_store:
-            del memory_store[wa_id]
-            logger.info(f"Memory cleared for wa_id: {wa_id}")
-        return {"status": "success", "message": f"Memory cleared for wa_id: {wa_id}"}
-    except Exception as e:
-        logger.error(f"Error clearing memory: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/clear_all_memory")
-async def clear_all_memory():
-    try:
-        global memory_store
-        memory_store.clear()
-        logger.info("All memory cleared globally")
-        return {"status": "success", "message": "All conversation memory cleared"}
-    except Exception as e:
-        logger.error(f"Error clearing all memory: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # Endpoint pour obtenir la liste des blocs disponibles
@@ -430,9 +368,8 @@ async def test_message(request: Request):
         body = await request.json()
         test_message = body.get("message", "")
         
-        # Test de détection de paiement et escalade
+        # Test de détection de paiement
         payment_detected = detect_payment_issue(test_message)
-        escalade_detected = detect_escalade_trigger(test_message)
         
         # Recherche sémantique
         similar_docs_with_scores = vector_store.similarity_search_with_score(test_message, k=3)
@@ -452,7 +389,6 @@ async def test_message(request: Request):
         return {
             "test_message": test_message,
             "payment_issue_detected": payment_detected,
-            "escalade_trigger_detected": escalade_detected,
             "semantic_matches": matches[:3],
             "total_matches": len(matches)
         }
