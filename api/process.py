@@ -377,6 +377,19 @@ async def process_message(request: Request):
         logger.error(f"Error processing message: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/clear_memory")
+async def clear_memory(request: Request):
+    try:
+        body = await request.json()
+        wa_id = body.get("wa_id", "")
+        if wa_id in memory_store:
+            del memory_store[wa_id]  # Supprime la mémoire pour cet utilisateur
+            logger.info(f"Memory cleared for wa_id: {wa_id}")
+        return {"status": "success", "message": f"Memory cleared for wa_id: {wa_id}"}
+    except Exception as e:
+        logger.error(f"Error clearing memory: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # Endpoint pour obtenir la liste des blocs disponibles
 @app.get("/blocs")
 async def get_blocs():
