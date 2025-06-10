@@ -131,7 +131,6 @@ blocs_data = {
         "escalade_agent_admin": {
             "id": "escalade_agent_admin",
             "declencheurs": [
-                "paiement",
                 "preuve de virement",
                 "fichier ou échéance",
                 "retard anormal",
@@ -220,7 +219,7 @@ def detect_payment_issue(message):
         "je veux être payé", "paiement en attente", "problème de paiement",
         "où en est mon paiement", "savoir où en est mon paiement",
         "statut de mon paiement", "paiement en cours", "suivi de paiement",
-        "c’est quand que je vais recevoir mon paiement"  # Ajout explicite
+        "c’est quand que je vais recevoir mon paiement"
     ]
     
     message_lower = message.lower()
@@ -308,9 +307,9 @@ async def process_message(request: Request):
         # Ajout du message utilisateur à la mémoire
         memory.chat_memory.add_user_message(user_message)
         
-        # Si un bloc a déjà été trouvé, le retourner avec priorité
+        # Priorité absolue au matched_bloc_response (Fuzzy Matcher)
         if matched_bloc_response:
-            logger.info(f"Using pre-matched response: {matched_bloc_response}")
+            logger.info(f"Using pre-matched response from Fuzzy Matcher: {matched_bloc_response}")
             memory.chat_memory.add_ai_message(matched_bloc_response)
             return {
                 "matched_bloc_response": matched_bloc_response,
