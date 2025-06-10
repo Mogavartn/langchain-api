@@ -285,8 +285,9 @@ async def process_message(request: Request):
         body = await request.json()
         user_message = body.get("message_original", body.get("message", ""))
         matched_bloc_response = body.get("matched_bloc_response", "")
-        wa_id = body.get("wa_id", "")
+        wa_id = body.get("wa_id", "default_wa_id")  # Valeur par défaut si absent
         
+        logger.info(f"Raw request body: {body}")
         logger.info(f"Processing message: {user_message}, wa_id: {wa_id}, matched_bloc_response: {matched_bloc_response}")
         
         # Initialisation de la mémoire pour cet utilisateur
@@ -308,7 +309,7 @@ async def process_message(request: Request):
         memory.chat_memory.add_user_message(user_message)
         
         # Priorité absolue au matched_bloc_response (Fuzzy Matcher) avec blocage d'escalade
-        if matched_bloc_response:
+        if matched_bloc_response and matched_bloc_response.strip():
             logger.info(f"Using pre-matched response from Fuzzy Matcher: {matched_bloc_response}")
             memory.chat_memory.add_ai_message(matched_bloc_response)
             return {
@@ -430,6 +431,7 @@ async def test_message(request: Request):
     try:
         body = await request.json()
         test_message = body.get("message", "")
+        matched_bloc_response = body.get("matched_bloc_response", "")
         
         # Test de détection de paiement et escalade
         payment_detected = detect_payment_issue(test_message)
@@ -452,6 +454,7 @@ async def test_message(request: Request):
         
         return {
             "test_message": test_message,
+            "matched_bloc_response": matched_bloc_response,
             "payment_issue_detected": payment_detected,
             "escalade_trigger_detected": escalade_detected,
             "semantic_matches": matches[:3],
