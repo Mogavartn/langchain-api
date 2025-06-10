@@ -390,6 +390,17 @@ async def clear_memory(request: Request):
         logger.error(f"Error clearing memory: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/clear_all_memory")
+async def clear_all_memory():
+    try:
+        global memory_store
+        memory_store.clear()  # Supprime toutes les mémoires
+        logger.info("All memory cleared globally")
+        return {"status": "success", "message": "All conversation memory cleared"}
+    except Exception as e:
+        logger.error(f"Error clearing all memory: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # Endpoint pour obtenir la liste des blocs disponibles
 @app.get("/blocs")
 async def get_blocs():
