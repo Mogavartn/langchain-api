@@ -307,13 +307,14 @@ async def process_message(request: Request):
         # Ajout du message utilisateur à la mémoire
         memory.chat_memory.add_user_message(user_message)
         
-        # Priorité absolue au matched_bloc_response (Fuzzy Matcher)
+        # Priorité absolue au matched_bloc_response (Fuzzy Matcher) avec blocage d'escalade
         if matched_bloc_response:
             logger.info(f"Using pre-matched response from Fuzzy Matcher: {matched_bloc_response}")
             memory.chat_memory.add_ai_message(matched_bloc_response)
             return {
                 "matched_bloc_response": matched_bloc_response,
-                "memory": memory.load_memory_variables({})["history"]
+                "memory": memory.load_memory_variables({})["history"],
+                "escalade_required": False  # Forcer l'absence d'escalade
             }
         
         # Détection prioritaire des déclencheurs d'escalade
