@@ -219,7 +219,8 @@ def detect_payment_issue(message):
         "où est mon argent", "argent pas reçu", "rembourser mon cpf",
         "je veux être payé", "paiement en attente", "problème de paiement",
         "où en est mon paiement", "savoir où en est mon paiement",
-        "statut de mon paiement", "paiement en cours", "suivi de paiement"
+        "statut de mon paiement", "paiement en cours", "suivi de paiement",
+        "c’est quand que je vais recevoir mon paiement"  # Ajout explicite
     ]
     
     message_lower = message.lower()
@@ -230,7 +231,7 @@ def detect_payment_issue(message):
             return True
     
     # Vérifie des combinaisons (ex. : "paiement" + "où")
-    if "paiement" in message_lower and any(word in message_lower for word in ["où", "ou", "savoir", "statut", "suivi"]):
+    if "paiement" in message_lower and any(word in message_lower for word in ["où", "ou", "savoir", "statut", "suivi", "quand", "recevoir"]):
         return True
     
     return False
@@ -307,10 +308,10 @@ async def process_message(request: Request):
         # Ajout du message utilisateur à la mémoire
         memory.chat_memory.add_user_message(user_message)
         
-        # Si un bloc a déjà été trouvé, le retourner
+        # Si un bloc a déjà été trouvé, le retourner avec priorité
         if matched_bloc_response:
+            logger.info(f"Using pre-matched response: {matched_bloc_response}")
             memory.chat_memory.add_ai_message(matched_bloc_response)
-            logger.info(f"Returning matched_bloc_response: {matched_bloc_response}")
             return {
                 "matched_bloc_response": matched_bloc_response,
                 "memory": memory.load_memory_variables({})["history"]
