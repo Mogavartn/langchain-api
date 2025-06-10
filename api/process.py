@@ -130,6 +130,13 @@ blocs_data = {
     "blocs_escalade": {
         "escalade_agent_admin": {
             "id": "escalade_agent_admin",
+            "declencheurs": [
+                "paiement",
+                "preuve de virement",
+                "fichier ou échéance",
+                "retard anormal",
+                "vérification dossier"
+            ],
             "response": "🔁 ESCALADE AGENT ADMIN\n\n📅 Rappel :\n\"Notre équipe traite les demandes du lundi au vendredi, de 9h à 17h (hors pause déjeuner).\nNous te répondrons dès que possible.\"\n\n🕐 Notre équipe traite les demandes du lundi au vendredi, de 9h à 17h (hors pause déjeuner).\nOn te tiendra informé dès qu'on a du nouveau ✅"
         },
         "escalade_agent_co": {
@@ -228,6 +235,12 @@ def detect_payment_issue(message):
     
     return False
 
+# Fonction pour détecter les déclencheurs d'escalade
+def detect_escalade_trigger(message):
+    escalade_triggers = blocs_data["blocs_escalade"]["escalade_agent_admin"]["declencheurs"]
+    message_lower = message.lower()
+    return any(trigger in message_lower for trigger in escalade_triggers)
+
 # Fonction pour analyser le contexte et choisir le bon sous-bloc
 def get_contextualized_response(user_message, matched_bloc):
     message_lower = user_message.lower()
@@ -279,8 +292,8 @@ async def process_message(request: Request):
         
         memory = memory_store[wa_id]
         
-        # Réinitialise la mémoire si c'est une nouvelle demande de paiement
-        if detect_payment_issue(user_message) and "paiement" in user_message.lower():
+        # Réinitialise la mémoire si c'est une nouvelle demande de paiement ou escalade
+        if detect_payment_issue(user_message) and "paiement" in user_message.lower() or detect_escalade_trigger(user_message):
             memory.clear()  # Reset pour éviter les biais du contexte précédent
         
         # Ajout du message utilisateur à la mémoire
@@ -293,6 +306,18 @@ async def process_message(request: Request):
                 "matched_bloc_response": matched_bloc_response,
                 "memory": memory.load_memory_variables({})["history"]
             }
+        
+        # Détection prioritaire des déclencheurs d'escalade
+        if detect_escalade_trigger(user_message):
+            escalade_bloc = next((bloc for bloc in blocs if bloc["id"] == "escalade_agent_admin"), None)
+            if escalade_bloc:
+                memory.chat_memory.add_ai_message(escalade_bloc["response"])
+                return {
+                    "matched_bloc_response": escalade_bloc["response"],
+                    "memory": memory.load_memory_variables({})["history"],
+                    "escalade_required": True,
+                    "escalade_type": "admin"
+                }
         
         # Détection prioritaire des problèmes de paiement
         if detect_payment_issue(user_message):
@@ -368,8 +393,9 @@ async def test_message(request: Request):
         body = await request.json()
         test_message = body.get("message", "")
         
-        # Test de détection de paiement
+        # Test de détection de paiement et escalade
         payment_detected = detect_payment_issue(test_message)
+        escalade_detected = detect_escalade_trigger(test_message)
         
         # Recherche sémantique
         similar_docs_with_scores = vector_store.similarity_search_with_score(test_message, k=3)
@@ -389,6 +415,7 @@ async def test_message(request: Request):
         return {
             "test_message": test_message,
             "payment_issue_detected": payment_detected,
+            "escalade_trigger_detected": escalade_detected,
             "semantic_matches": matches[:3],
             "total_matches": len(matches)
         }
