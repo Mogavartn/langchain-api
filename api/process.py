@@ -25,22 +25,22 @@ async def process_message(request: Request):
         logger.info(f"Raw request body: {body}")
         logger.info(f"Processing: message={user_message}, wa_id={wa_id}, matched_bloc={matched_bloc_response}")
 
+        # Ignorer la mémoire si matched_bloc_response est présent
+        if matched_bloc_response and matched_bloc_response.strip():
+            logger.info(f"Using matched_bloc_response, ignoring memory: {matched_bloc_response}")
+            return {
+                "matched_bloc_response": matched_bloc_response,
+                "memory": "",  # Retourner une mémoire vide
+                "escalade_required": False,
+                "use_exact_match": True,
+                "status": "exact_match_enforced"
+            }
+
         if wa_id not in memory_store:
             memory_store[wa_id] = ConversationBufferMemory()
         memory = memory_store[wa_id]
 
         memory.chat_memory.add_user_message(user_message)
-
-        if matched_bloc_response and matched_bloc_response.strip():
-            logger.info(f"Matched bloc detected, forcing exact match: {matched_bloc_response}")
-            memory.chat_memory.add_ai_message(matched_bloc_response)
-            return {
-                "matched_bloc_response": matched_bloc_response,
-                "memory": memory.load_memory_variables({})["history"],
-                "escalade_required": False,
-                "use_exact_match": True,
-                "status": "exact_match_enforced"
-            }
 
         if "retard anormal" in user_message.lower():
             escalade_response = "🔁 ESCALADE AGENT ADMIN\n\n📅 Rappel : \"Notre équipe traite les demandes du lundi au vendredi, de 9h à 17h (hors pause déjeuner).\"\n🕐 On te tiendra informé dès qu'on a du nouveau ✅"
@@ -60,10 +60,6 @@ async def process_message(request: Request):
                 "memory": memory.load_memory_variables({})["history"],
                 "priority_detection": "PAYMENT_ISSUE"
             }
-
-        if matched_bloc_response:  # Si reçu mais non utilisé, signaler une erreur
-            logger.error(f"Matched_bloc_response ignored: {matched_bloc_response}")
-            raise HTTPException(status_code=400, detail="Matched_bloc_response was provided but not used. Check AgentAI configuration.")
 
         escalade_response = "Je vais faire suivre à la bonne personne dans l'équipe 😊 Notre équipe est disponible du lundi au vendredi, de 9h à 17h (hors pause déjeuner)."
         memory.chat_memory.add_ai_message(escalade_response)
