@@ -32,16 +32,17 @@ async def process_message(request: Request):
         memory.chat_memory.add_user_message(user_message)
 
         if matched_bloc_response and matched_bloc_response.strip():
-            logger.info(f"Using matched_bloc_response: {matched_bloc_response}")
+            logger.info(f"Matched bloc detected, forcing exact match: {matched_bloc_response}")
             memory.chat_memory.add_ai_message(matched_bloc_response)
             return {
                 "matched_bloc_response": matched_bloc_response,
                 "memory": memory.load_memory_variables({})["history"],
                 "escalade_required": False,
-                "use_exact_match": True
+                "use_exact_match": True,
+                "status": "exact_match_enforced"
             }
 
-        if "retard anormal" in user_message.lower():  # Exemple simplifié
+        if "retard anormal" in user_message.lower():
             escalade_response = "🔁 ESCALADE AGENT ADMIN\n\n📅 Rappel : \"Notre équipe traite les demandes du lundi au vendredi, de 9h à 17h (hors pause déjeuner).\"\n🕐 On te tiendra informé dès qu'on a du nouveau ✅"
             memory.chat_memory.add_ai_message(escalade_response)
             return {
@@ -52,7 +53,7 @@ async def process_message(request: Request):
             }
 
         if "paiement" in user_message.lower():
-            payment_response = "Salut 👋\nLe délai dépend du type de formation qui va être rémunérée et surtout de la manière dont elle a été financée 💡\n\n🔹 Si la formation a été payée directement...\n→ Le paiement est effectué sous 7 jours...\n👉 Je te dirai si c'est dans les délais 😊"  # Simplifié
+            payment_response = "Salut 👋\nLe délai dépend du type de formation qui va être rémunérée et surtout de la manière dont elle a été financée 💡\n\n🔹 Si la formation a été payée directement...\n→ Le paiement est effectué sous 7 jours...\n👉 Je te dirai si c'est dans les délais 😊"
             memory.chat_memory.add_ai_message(payment_response)
             return {
                 "matched_bloc_response": payment_response,
@@ -60,8 +61,13 @@ async def process_message(request: Request):
                 "priority_detection": "PAYMENT_ISSUE"
             }
 
+        if matched_bloc_response:  # Si reçu mais non utilisé, signaler une erreur
+            logger.error(f"Matched_bloc_response ignored: {matched_bloc_response}")
+            raise HTTPException(status_code=400, detail="Matched_bloc_response was provided but not used. Check AgentAI configuration.")
+
         escalade_response = "Je vais faire suivre à la bonne personne dans l'équipe 😊 Notre équipe est disponible du lundi au vendredi, de 9h à 17h (hors pause déjeuner)."
         memory.chat_memory.add_ai_message(escalade_response)
+        logger.warning("Falling back to default escalade due to no match")
         return {
             "matched_bloc_response": escalade_response,
             "memory": memory.load_memory_variables({})["history"],
