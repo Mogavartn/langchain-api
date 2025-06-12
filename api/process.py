@@ -11,7 +11,7 @@ import re
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="JAK Company AI Agent API", version="6.0")
+app = FastAPI(title="JAK Company AI Agent API", version="6.1")
 
 # Configuration CORS pour permettre les tests locaux
 app.add_middleware(
@@ -33,7 +33,83 @@ memory_store: Dict[str, ConversationBufferMemory] = {}
 class MemoryManager:
     """Gestionnaire de mémoire optimisé pour limiter la taille"""
 
-    @staticmethod
+    @app.post("/clear_memory/{wa_id}")
+async def clear_memory(wa_id: str):
+    """Efface la mémoire d'une conversation spécifique"""
+    try:
+        if wa_id in memory_store:
+            del memory_store[wa_id]
+            logger.info(f"Memory cleared for session: {wa_id}")
+            return {"status": "success", "message": f"Memory cleared for {wa_id}"}
+        else:
+            return {"status": "info", "message": f"No memory found for {wa_id}"}
+    except Exception as e:
+        logger.error(f"Error clearing memory for {wa_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/clear_all_memory")
+async def clear_all_memory():
+    """Efface toute la mémoire"""
+    try:
+        global memory_store
+        session_count = len(memory_store)
+        memory_store.clear()
+        logger.info(f"All memory cleared ({session_count} sessions)")
+        return {"status": "success", "message": f"All memory cleared ({session_count} sessions)"}
+    except Exception as e:
+        logger.error(f"Error clearing all memory: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/memory_status")
+async def memory_status():
+    """Retourne le statut de la mémoire avec optimisations"""
+    try:
+        sessions = {}
+        total_memory_chars = 0
+        
+        for wa_id, memory in memory_store.items():
+            memory_summary = MemoryManager.get_memory_summary(memory)
+            sessions[wa_id] = {
+                **memory_summary,
+                "last_interaction": "recent"  # Pourrait être enrichi avec timestamp
+            }
+            total_memory_chars += memory_summary["memory_size_chars"]
+        
+        return {
+            "active_sessions": len(memory_store),
+            "memory_type": "ConversationBufferMemory (Optimized)",
+            "max_messages_per_session": 15,
+            "sessions": sessions,
+            "total_memory_size_chars": total_memory_chars,
+            "optimization": "Auto-trim to 15 messages"
+        }
+    except Exception as e:
+        logger.error(f"Error getting memory status: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/health")
+async def health_check():
+    """Endpoint de santé pour vérifier que l'API fonctionne"""
+    return {
+        "status": "healthy",
+        "version": "6.1",
+        "openai_configured": bool(os.environ.get("OPENAI_API_KEY")),
+        "active_sessions": len(memory_store),
+        "memory_type": "ConversationBufferMemory (Optimized)",
+        "memory_optimization": "Auto-trim to 15 messages",
+        "improvements": [
+            "Fixed priority rules logic",
+            "Eliminated code duplication",
+            "Improved conversation context management",
+            "Better CPF delay handling",
+            "Enhanced payment context processing",
+            "Corrected indentation issues"
+        ]
+    }
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)staticmethod
     def trim_memory(memory: ConversationBufferMemory, max_messages: int = 15):
         """Limite la mémoire aux N derniers messages pour économiser les tokens"""
         messages = memory.chat_memory.messages
@@ -293,18 +369,16 @@ class MessageProcessor:
 
     @staticmethod
     def detect_priority_rules(user_message: str, matched_bloc_response: str, conversation_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Applique les règles de priorité avec prise en compte du contexte"""
+        """Applique les règles de priorité avec prise en compte du contexte - VERSION CORRIGÉE"""
         
         message_lower = user_message.lower()
         
-        # NOUVELLE RÈGLE : Détection des réponses aux questions de financement
+        # ÉTAPE 1: Traitement des réponses aux questions spécifiques en cours
         if conversation_context.get("awaiting_financing_info"):
-            # L'utilisateur répond aux questions de financement
             financing_type = PaymentContextProcessor.extract_financing_type(user_message)
             delay_months = PaymentContextProcessor.extract_time_delay(user_message)
             
             if financing_type == "CPF" and delay_months:
-                # Traitement spécial CPF avec délai
                 cpf_result = PaymentContextProcessor.handle_cpf_delay_context(
                     delay_months, user_message, conversation_context
                 )
@@ -331,52 +405,20 @@ On te tiendra informé dès qu'on a une réponse ✅""",
                     "escalade_type": "admin"
                 }
             
-            elif financing_type:
-                # Demander la date si pas encore fournie
-                if not delay_months:
-                    return {
-                        "use_matched_bloc": False,
-                        "priority_detected": "DEMANDE_DATE_FORMATION",
-                        "response": "Et environ quand la formation s'est-elle terminée ?",
-                        "context": conversation_context,
-                        "awaiting_financing_info": True
-                    }
+            elif financing_type and not delay_months:
+                return {
+                    "use_matched_bloc": False,
+                    "priority_detected": "DEMANDE_DATE_FORMATION",
+                    "response": "Et environ quand la formation s'est-elle terminée ?",
+                    "context": conversation_context,
+                    "awaiting_financing_info": True
+                }
         
-        # Gestion spéciale du contexte CPF bloqué
+        # ÉTAPE 2: Traitement du contexte CPF bloqué
         if conversation_context.get("awaiting_cpf_info"):
             return PaymentContextProcessor.handle_cpf_delay_context(0, user_message, conversation_context)
         
-        # RÈGLE 1: Détection problème paiement formation (PRIORITÉ ABSOLUE)
-        payment_keywords = [
-            "pas été payé", "rien reçu", "virement", "attends",
-            "paiement", "argent", "retard", "promesse", "veux être payé",
-            "payé pour ma formation", "être payé pour"
-        ]
-        
-        if any(keyword in message_lower for keyword in payment_keywords):
-            # Si un bloc est déjà matché pour le paiement, le garder
-            if matched_bloc_response and ("paiement" in matched_bloc_response.lower() or "délai" in matched_bloc_response.lower()):
-                
-                # NOUVELLE LOGIQUE: Éviter les répétitions
-                if conversation_context["message_count"] > 0:
-                    # Si c'est un message de suivi sur le paiement, personnaliser
-                    return {
-                        "use_matched_bloc": False,
-                        "priority_detected": "PAIEMENT_SUIVI",
-                        "response": None, # Laisser l'IA gérer avec contexte
-                        "context": conversation_context,
-                        "use_ai": True
-                    }
-                else:
-                    # Premier message paiement = utiliser le bloc
-                    return {
-                        "use_matched_bloc": True,
-                        "priority_detected": "PAIEMENT_FORMATION",
-                        "response": matched_bloc_response,
-                        "context": conversation_context
-                    }
-        
-        # RÈGLE 2: Agressivité détectée
+        # ÉTAPE 3: Agressivité (priorité haute pour couper court)
         if MessageProcessor.is_aggressive(user_message):
             return {
                 "use_matched_bloc": False,
@@ -385,26 +427,77 @@ On te tiendra informé dès qu'on a une réponse ✅""",
                 "context": conversation_context
             }
         
-        # RÈGLE 3: Messages de suivi - Privilégier l'IA pour contexte
+        # ÉTAPE 4: Détection problème paiement formation
+        payment_keywords = [
+            "pas été payé", "rien reçu", "virement", "attends",
+            "paiement", "argent", "retard", "promesse", "veux être payé",
+            "payé pour ma formation", "être payé pour"
+        ]
+        
+        if any(keyword in message_lower for keyword in payment_keywords):
+            # Si c'est un message de suivi sur le paiement
+            if conversation_context["message_count"] > 0 and conversation_context["is_follow_up"]:
+                return {
+                    "use_matched_bloc": False,
+                    "priority_detected": "PAIEMENT_SUIVI",
+                    "response": None,  # Laisser l'IA gérer avec contexte
+                    "context": conversation_context,
+                    "use_ai": True
+                }
+            # Si un bloc est matché pour le paiement, l'utiliser
+            elif matched_bloc_response and ("paiement" in matched_bloc_response.lower() or "délai" in matched_bloc_response.lower()):
+                return {
+                    "use_matched_bloc": True,
+                    "priority_detected": "PAIEMENT_FORMATION_BLOC",
+                    "response": matched_bloc_response,
+                    "context": conversation_context
+                }
+            # Sinon, fallback paiement
+            else:
+                return {
+                    "use_matched_bloc": False,
+                    "priority_detected": "PAIEMENT_SANS_BLOC",
+                    "response": """Salut 👋
+
+Je comprends que tu aies des questions sur le paiement 💰
+
+Je vais faire suivre ta demande à notre équipe spécialisée qui te recontactera rapidement ✅
+
+🕐 Horaires : Lundi-Vendredi, 9h-17h""",
+                    "context": conversation_context,
+                    "escalade_type": "admin"
+                }
+        
+        # ÉTAPE 5: Bloc matché (si pas de problème de paiement détecté)
+        if matched_bloc_response and matched_bloc_response.strip():
+            # Éviter les répétitions si c'est un message de suivi
+            if conversation_context["is_follow_up"] and conversation_context["message_count"] > 0:
+                return {
+                    "use_matched_bloc": False,
+                    "priority_detected": "FOLLOW_UP_VS_BLOC",
+                    "response": None,  # Laisser l'IA gérer
+                    "context": conversation_context,
+                    "use_ai": True
+                }
+            else:
+                return {
+                    "use_matched_bloc": True,
+                    "priority_detected": "BLOC_MATCHE",
+                    "response": matched_bloc_response,
+                    "context": conversation_context
+                }
+        
+        # ÉTAPE 6: Messages de suivi généraux
         if conversation_context["is_follow_up"] and conversation_context["message_count"] > 0:
             return {
                 "use_matched_bloc": False,
                 "priority_detected": "FOLLOW_UP_CONVERSATION",
-                "response": None, # Laisser l'IA gérer
+                "response": None,  # Laisser l'IA gérer
                 "context": conversation_context,
                 "use_ai": True
             }
         
-        # RÈGLE 4: Si matched_bloc_response existe ET ce n'est pas un suivi, l'utiliser
-        if matched_bloc_response and matched_bloc_response.strip() and not conversation_context["is_follow_up"]:
-            return {
-                "use_matched_bloc": True,
-                "priority_detected": "BLOC_MATCHE",
-                "response": matched_bloc_response,
-                "context": conversation_context
-            }
-        
-        # RÈGLE 5: Escalade automatique si nécessaire
+        # ÉTAPE 7: Escalade automatique
         escalade_type = ResponseValidator.validate_escalade_keywords(user_message)
         if escalade_type:
             return {
@@ -415,10 +508,12 @@ On te tiendra informé dès qu'on a une réponse ✅""",
                 "context": conversation_context
             }
         
+        # ÉTAPE 8: Fallback général
         return {
             "use_matched_bloc": False,
-            "priority_detected": "NONE",
+            "priority_detected": "FALLBACK_GENERAL",
             "context": conversation_context,
+            "response": None,
             "use_ai": True
         }
 
@@ -498,6 +593,10 @@ async def process_message(request: Request):
         )
         
         # Construction de la réponse selon la priorité et le contexte
+        final_response = None
+        response_type = "unknown"
+        escalade_required = False
+        
         if priority_result.get("use_matched_bloc") and priority_result.get("response"):
             final_response = priority_result["response"]
             response_type = "exact_match_enforced"
@@ -529,13 +628,11 @@ async def process_message(request: Request):
             escalade_required = False
             
         elif priority_result.get("priority_detected") == "FOLLOW_UP_CONVERSATION":
-            # Laisser l'IA gérer avec le contexte
             final_response = None # Sera géré par l'IA
             response_type = "follow_up_ai_handled"
             escalade_required = False
             
         elif priority_result.get("priority_detected") == "PAIEMENT_SUIVI":
-            # Laisser l'IA gérer avec le contexte
             final_response = None # Sera géré par l'IA
             response_type = "paiement_suivi_ai_handled"
             escalade_required = False
@@ -545,9 +642,19 @@ async def process_message(request: Request):
             response_type = "auto_escalade"
             escalade_required = True
             
+        elif priority_result.get("priority_detected") == "PAIEMENT_SANS_BLOC":
+            final_response = priority_result["response"]
+            response_type = "paiement_fallback"
+            escalade_required = True
+            
+        elif priority_result.get("priority_detected") == "BLOC_MATCHE":
+            final_response = priority_result["response"]
+            response_type = "bloc_matched"
+            escalade_required = False
+            
         else:
-            # Utiliser l'IA pour une réponse contextuelle
-            final_response = None # Sera géré par l'IA
+            # Utiliser l'IA pour une réponse contextuelle ou fallback
+            final_response = None
             response_type = "ai_contextual_response"
             escalade_required = priority_result.get("use_ai", False)
         
@@ -620,79 +727,3 @@ On te tiendra informé dès que possible ✅"""
             "conversation_context": {"message_count": 0, "is_follow_up": False, "needs_greeting": True},
             "memory_summary": {"total_messages": 0, "user_messages": 0, "ai_messages": 0, "memory_size_chars": 0}
         }
-
-@app.post("/clear_memory/{wa_id}")
-async def clear_memory(wa_id: str):
-    """Efface la mémoire d'une conversation spécifique"""
-    try:
-        if wa_id in memory_store:
-            del memory_store[wa_id]
-            logger.info(f"Memory cleared for session: {wa_id}")
-            return {"status": "success", "message": f"Memory cleared for {wa_id}"}
-        else:
-            return {"status": "info", "message": f"No memory found for {wa_id}"}
-    except Exception as e:
-        logger.error(f"Error clearing memory for {wa_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/clear_all_memory")
-async def clear_all_memory():
-    """Efface toute la mémoire"""
-    try:
-        global memory_store
-        session_count = len(memory_store)
-        memory_store.clear()
-        logger.info(f"All memory cleared ({session_count} sessions)")
-        return {"status": "success", "message": f"All memory cleared ({session_count} sessions)"}
-    except Exception as e:
-        logger.error(f"Error clearing all memory: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/memory_status")
-async def memory_status():
-    """Retourne le statut de la mémoire avec optimisations"""
-    try:
-        sessions = {}
-        total_memory_chars = 0
-        
-        for wa_id, memory in memory_store.items():
-            memory_summary = MemoryManager.get_memory_summary(memory)
-            sessions[wa_id] = {
-                **memory_summary,
-                "last_interaction": "recent" # Pourrait être enrichi avec timestamp
-            }
-            total_memory_chars += memory_summary["memory_size_chars"]
-        
-        return {
-            "active_sessions": len(memory_store),
-            "memory_type": "ConversationBufferMemory (Optimized)",
-            "max_messages_per_session": 15,
-            "sessions": sessions,
-            "total_memory_size_chars": total_memory_chars,
-            "optimization": "Auto-trim to 15 messages"
-        }
-    except Exception as e:
-        logger.error(f"Error getting memory status: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/health")
-async def health_check():
-    """Endpoint de santé pour vérifier que l'API fonctionne"""
-    return {
-        "status": "healthy",
-        "version": "6.0",
-        "openai_configured": bool(os.environ.get("OPENAI_API_KEY")),
-        "active_sessions": len(memory_store),
-        "memory_type": "ConversationBufferMemory (Optimized)",
-        "memory_optimization": "Auto-trim to 15 messages",
-        "improvements": [
-            "Enhanced conversation context management",
-            "Better CPF delay handling",
-            "Improved payment context processing",
-            "Advanced follow-up detection"
-        ]
-    }
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
