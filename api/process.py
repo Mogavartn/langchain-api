@@ -11,7 +11,7 @@ import re
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="JAK Company AI Agent API", version="4.3")
+app = FastAPI(title="JAK Company AI Agent API", version="4.4")
 
 # Configuration CORS pour permettre les tests locaux
 app.add_middleware(
@@ -176,80 +176,11 @@ class MessageProcessor:
 
         message_lower = user_message.lower()
 
-        # RÈGLE 1: Détection problème paiement formation (PRIORITÉ ABSOLUE)
-        payment_keywords = [
-            "pas été payé", "rien reçu", "virement", "attends",
-            "paiement", "argent", "retard", "promesse"
-        ]
-
-        if any(keyword in message_lower for keyword in payment_keywords):
-            # Si un bloc est déjà matché pour le paiement, le garder
-            if matched_bloc_response and ("paiement" in matched_bloc_response.lower() or "délai" in matched_bloc_response.lower()):
-                return {
-                    "use_matched_bloc": True,
-                    "priority_detected": "PAIEMENT_FORMATION",
-                    "response": matched_bloc_response,
-                    "context": conversation_context
-                }
-
-        # RÈGLE 2: Agressivité détectée - CORRIGÉE pour éviter les faux positifs
-        if MessageProcessor.is_aggressive(user_message):
-            return {
-                "use_matched_bloc": False,
-                "priority_detected": "AGRESSIVITE",
-                "response": "Être impoli ne fera pas avancer la situation plus vite. Bien au contraire. Souhaites-tu que je te propose un poème ou une chanson d'amour pour apaiser ton cœur ? 💌",
-                "context": conversation_context
-            }
-
-        # RÈGLE 3: Messages de suivi - Privilégier l'IA pour contexte
-        if conversation_context["is_follow_up"] and conversation_context["message_count"] > 0:
-            return {
-                "use_matched_bloc": False,
-                "priority_detected": "FOLLOW_UP_CONVERSATION",
-                "response": None,  # Laisser l'IA gérer
-                "context": conversation_context,
-                "use_ai": True
-            }
-
-        # RÈGLE 4: Si matched_bloc_response existe ET ce n'est pas un suivi, l'utiliser
-        if matched_bloc_response and matched_bloc_response.strip() and not conversation_context["is_follow_up"]:
-            return {
-                "use_matched_bloc": True,
-                "priority_detected": "BLOC_MATCHE",
-                "response": matched_bloc_response,
-                "context": conversation_context
-            }
-
-        # RÈGLE 5: Escalade automatique si nécessaire
-        escalade_type = ResponseValidator.validate_escalade_keywords(user_message)
-        if escalade_type:
-            return {
-                "use_matched_bloc": False,
-                "priority_detected": "ESCALADE_AUTO",
-                "escalade_type": escalade_type,
-                "response": "🔄 ESCALADE AGENT ADMIN\n\n🕐 Notre équipe traite les demandes du lundi au vendredi, de 9h à 17h (hors pause déjeuner).\n📧 On te tiendra informé dès qu'on a du nouveau ✅",
-                "context": conversation_context
-            }
-
-        return {
-            "use_matched_bloc": False, 
-            "priority_detected": "NONE",
-            "context": conversation_context,
-            "use_ai": True
-        }
-    # AJOUT dans Process.py - Gestion contexte OPCO/délais
-
-class MessageProcessor:
-    @staticmethod
-    def detect_priority_rules(user_message: str, matched_bloc_response: str, conversation_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Applique les règles de priorité avec prise en compte du contexte"""
-
-        message_lower = user_message.lower()
-
         # RÈGLE 1: DÉTECTION URGENCE PAIEMENT OPCO (NOUVELLE)
         opco_urgency_patterns = [
             "8 mois", "9 mois", "10 mois", "11 mois", "12 mois",
-            "plus de 6 mois", "jamais reçu"
+            "plus de 6 mois", "ca fait des mois", "ça fait des mois",
+            "depuis des mois", "toujours pas payé", "jamais reçu"
         ]
         
         if ("opco" in message_lower and 
@@ -405,7 +336,7 @@ async def process_message(request: Request):
 
         memory = memory_store[wa_id]
         
-        # NOUVEAU : Optimiser la mémoire en limitant la taille
+        # Optimiser la mémoire en limitant la taille
         MemoryManager.trim_memory(memory, max_messages=15)
         
         # Analyser le contexte de conversation
@@ -433,6 +364,11 @@ async def process_message(request: Request):
             response_type = "exact_match_enforced"
             escalade_required = False
 
+        elif priority_result.get("priority_detected") == "URGENCE_PAIEMENT_OPCO":
+            final_response = priority_result["response"]
+            response_type = "urgence_opco_detected"
+            escalade_required = True
+
         elif priority_result.get("priority_detected") == "AGRESSIVITE":
             final_response = priority_result["response"]
             response_type = "agressivite_detected"
@@ -442,6 +378,12 @@ async def process_message(request: Request):
             # Laisser l'IA gérer avec le contexte
             final_response = None  # Sera géré par l'IA
             response_type = "follow_up_ai_handled"
+            escalade_required = False
+
+        elif priority_result.get("priority_detected") == "PAIEMENT_SUIVI":
+            # Laisser l'IA gérer avec le contexte
+            final_response = None  # Sera géré par l'IA
+            response_type = "paiement_suivi_ai_handled"
             escalade_required = False
 
         elif priority_result.get("priority_detected") == "ESCALADE_AUTO":
@@ -495,7 +437,7 @@ On te tiendra informé dès que possible ✅"""
             "response_length": len(final_response) if final_response else 0,
             "session_id": wa_id,
             "conversation_context": conversation_context,
-            "memory_summary": memory_summary  # NOUVEAU : résumé mémoire
+            "memory_summary": memory_summary
         }
 
         logger.info(f"[{wa_id}] Response generated: type={response_type}, escalade={escalade_required}, memory={memory_summary}")
@@ -584,7 +526,7 @@ async def health_check():
     """Endpoint de santé pour vérifier que l'API fonctionne"""
     return {
         "status": "healthy",
-        "version": "4.3",
+        "version": "4.4",
         "openai_configured": bool(os.environ.get("OPENAI_API_KEY")),
         "active_sessions": len(memory_store),
         "memory_type": "ConversationBufferMemory (Optimized)",
