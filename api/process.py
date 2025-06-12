@@ -11,7 +11,7 @@ import re
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="JAK Company AI Agent API", version="6.1")
+app = FastAPI(title="JAK Company AI Agent API", version="7.0")
 
 # Configuration CORS pour permettre les tests locaux
 app.add_middleware(
@@ -32,8 +32,29 @@ memory_store: Dict[str, ConversationBufferMemory] = {}
 
 class MemoryManager:
     """Gestionnaire de mémoire optimisé pour limiter la taille"""
+    
+    @staticmethod
+    def trim_memory(memory: ConversationBufferMemory, max_messages: int = 15):
+        """Limite la mémoire aux N derniers messages pour économiser les tokens"""
+        messages = memory.chat_memory.messages
+        
+        if len(messages) > max_messages:
+            # Garder seulement les max_messages derniers
+            memory.chat_memory.messages = messages[-max_messages:]
+            logger.info(f"Memory trimmed to {max_messages} messages")
+    
+    @staticmethod
+    def get_memory_summary(memory: ConversationBufferMemory) -> Dict[str, Any]:
+        """Retourne un résumé de la mémoire"""
+        messages = memory.chat_memory.messages
+        return {
+            "total_messages": len(messages),
+            "user_messages": len([m for m in messages if hasattr(m, 'type') and m.type == 'human']),
+            "ai_messages": len([m for m in messages if hasattr(m, 'type') and m.type == 'ai']),
+            "memory_size_chars": sum(len(str(m.content)) for m in messages)
+        }
 
-    @app.post("/clear_memory/{wa_id}")
+@app.post("/clear_memory/{wa_id}")
 async def clear_memory(wa_id: str):
     """Efface la mémoire d'une conversation spécifique"""
     try:
@@ -92,61 +113,38 @@ async def health_check():
     """Endpoint de santé pour vérifier que l'API fonctionne"""
     return {
         "status": "healthy",
-        "version": "6.1",
+        "version": "7.0",
         "openai_configured": bool(os.environ.get("OPENAI_API_KEY")),
         "active_sessions": len(memory_store),
         "memory_type": "ConversationBufferMemory (Optimized)",
         "memory_optimization": "Auto-trim to 15 messages",
         "improvements": [
-            "Fixed priority rules logic",
-            "Eliminated code duplication",
+            "MAJOR FIX: Respect n8n bloc detection",
+            "Fixed priority rules logic to prioritize n8n matches",
             "Improved conversation context management",
             "Better CPF delay handling",
             "Enhanced payment context processing",
-            "Corrected indentation issues"
+            "Corrected bloc override issue"
         ]
     }
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)staticmethod
-    def trim_memory(memory: ConversationBufferMemory, max_messages: int = 15):
-        """Limite la mémoire aux N derniers messages pour économiser les tokens"""
-        messages = memory.chat_memory.messages
-
-        if len(messages) > max_messages:
-            # Garder seulement les max_messages derniers
-            memory.chat_memory.messages = messages[-max_messages:]
-            logger.info(f"Memory trimmed to {max_messages} messages")
-
-    @staticmethod
-    def get_memory_summary(memory: ConversationBufferMemory) -> Dict[str, Any]:
-        """Retourne un résumé de la mémoire"""
-        messages = memory.chat_memory.messages
-        return {
-            "total_messages": len(messages),
-            "user_messages": len([m for m in messages if hasattr(m, 'type') and m.type == 'human']),
-            "ai_messages": len([m for m in messages if hasattr(m, 'type') and m.type == 'ai']),
-            "memory_size_chars": sum(len(str(m.content)) for m in messages)
-        }
-
 class ResponseValidator:
     """Classe pour valider et nettoyer les réponses"""
-
+    
     @staticmethod
     def clean_response(response: str) -> str:
         """Nettoie et formate la réponse"""
         if not response:
             return ""
-
+        
         # Supprimer les caractères de contrôle
         response = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', response)
-
+        
         # Nettoyer les espaces multiples
         response = re.sub(r'\s+', ' ', response.strip())
-
+        
         return response
-
+    
     @staticmethod
     def validate_escalade_keywords(message: str) -> Optional[str]:
         """Détecte si le message nécessite une escalade"""
@@ -154,12 +152,12 @@ class ResponseValidator:
             "retard anormal", "paiement bloqué", "problème grave",
             "urgence", "plainte", "avocat", "tribunal"
         ]
-
+        
         message_lower = message.lower()
         for keyword in escalade_keywords:
             if keyword in message_lower:
                 return "admin"
-
+        
         return None
 
 class ConversationContextManager:
@@ -198,7 +196,7 @@ class ConversationContextManager:
                 if "comment la formation a été financée" in content:
                     awaiting_financing_info = True
                     last_bot_message = str(msg.content)
-                    
+                
                 if "environ quand la formation s'est terminée" in content:
                     awaiting_financing_info = True
                     last_bot_message = str(msg.content)
@@ -285,7 +283,7 @@ class PaymentContextProcessor:
                         "response": """On comprend parfaitement ta frustration. Ce dossier fait partie des quelques cas (moins de 50 sur plus de 2500) bloqués depuis la réforme CPF de février 2025. Même nous n'avons pas été payés. Le blocage est purement administratif, et les délais sont impossibles à prévoir. On te tiendra informé dès qu'on a du nouveau. Inutile de relancer entre-temps 🙏
 
 Tous les éléments nécessaires ont bien été transmis à l'organisme de contrôle 📋🔍
-Mais le problème, c'est que la Caisse des Dépôts demande des documents que le centre de formation envoie sous une semaine…
+Mais le problème, c'est que la Caisse des Dépôts demande des documents que le centre de formation envoie sous une semaine...
 Et ensuite, ils prennent parfois jusqu'à 2 mois pour demander un nouveau document, sans donner de réponse entre-temps.
 
 ✅ On accompagne au maximum le centre de formation pour que tout rentre dans l'ordre.
@@ -327,7 +325,7 @@ Sinon, je fais remonter ta demande à notre équipe pour vérification ✅""",
 
 class MessageProcessor:
     """Classe principale pour traiter les messages avec contexte"""
-
+    
     @staticmethod
     def is_aggressive(message: str) -> bool:
         """Détecte l'agressivité en évitant les faux positifs"""
@@ -336,8 +334,8 @@ class MessageProcessor:
         
         # Liste des mots agressifs avec leurs contextes d'exclusion
         aggressive_patterns = [
-            ("merde", []), # Pas d'exclusion
-            ("nul", ["nul part", "nulle part"]), # Exclure "nul part"
+            ("merde", []),  # Pas d'exclusion
+            ("nul", ["nul part", "nulle part"]),  # Exclure "nul part"
             ("énervez", []),
             ("batards", []),
             ("putain", []),
@@ -366,12 +364,36 @@ class MessageProcessor:
                     return True
         
         return False
-
+    
     @staticmethod
     def detect_priority_rules(user_message: str, matched_bloc_response: str, conversation_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Applique les règles de priorité avec prise en compte du contexte - VERSION CORRIGÉE"""
+        """Applique les règles de priorité avec prise en compte du contexte - VERSION V7 CORRIGÉE"""
         
         message_lower = user_message.lower()
+        
+        logger.info(f"🔍 PRIORITY DETECTION V7: user_message='{user_message}', has_bloc_response={bool(matched_bloc_response)}")
+        
+        # ✅ ÉTAPE 0: PRIORITÉ ABSOLUE - Si n8n a matché un bloc, L'UTILISER !!!
+        if matched_bloc_response and matched_bloc_response.strip():
+            # Vérifier si c'est un vrai bloc (pas un fallback générique)
+            fallback_indicators = [
+                "je vais faire suivre ta demande à notre équipe",
+                "notre équipe est disponible du lundi au vendredi",
+                "on te tiendra informé dès que possible"
+            ]
+            
+            is_fallback = any(indicator in matched_bloc_response.lower() for indicator in fallback_indicators)
+            
+            if not is_fallback:
+                logger.info("✅ UTILISATION BLOC N8N - Bloc valide détecté par n8n")
+                return {
+                    "use_matched_bloc": True,
+                    "priority_detected": "N8N_BLOC_DETECTED",
+                    "response": matched_bloc_response,
+                    "context": conversation_context
+                }
+            else:
+                logger.info("⚠️ BLOC N8N IGNORÉ - Semble être un fallback générique")
         
         # ÉTAPE 1: Traitement des réponses aux questions spécifiques en cours
         if conversation_context.get("awaiting_financing_info"):
@@ -395,7 +417,7 @@ Pour un financement via un OPCO, le délai moyen est de 2 mois. Certains dossier
 
 Mais vu que cela fait plus de 2 mois, on préfère ne pas te faire attendre plus longtemps sans retour.
 
-👉 Je vais transmettre ta demande à notre équipe pour qu'on vérifie ton dossier dès maintenant 📋
+👉 Je vais transmettre ta demande à notre équipe pour qu'on vérifie ton dossier dès maintenant 🧾
 
 🔄 ESCALADE AGENT ADMIN
 
@@ -468,26 +490,7 @@ Je vais faire suivre ta demande à notre équipe spécialisée qui te recontacte
                     "escalade_type": "admin"
                 }
         
-        # ÉTAPE 5: Bloc matché (si pas de problème de paiement détecté)
-        if matched_bloc_response and matched_bloc_response.strip():
-            # Éviter les répétitions si c'est un message de suivi
-            if conversation_context["is_follow_up"] and conversation_context["message_count"] > 0:
-                return {
-                    "use_matched_bloc": False,
-                    "priority_detected": "FOLLOW_UP_VS_BLOC",
-                    "response": None,  # Laisser l'IA gérer
-                    "context": conversation_context,
-                    "use_ai": True
-                }
-            else:
-                return {
-                    "use_matched_bloc": True,
-                    "priority_detected": "BLOC_MATCHE",
-                    "response": matched_bloc_response,
-                    "context": conversation_context
-                }
-        
-        # ÉTAPE 6: Messages de suivi généraux
+        # ÉTAPE 5: Messages de suivi généraux
         if conversation_context["is_follow_up"] and conversation_context["message_count"] > 0:
             return {
                 "use_matched_bloc": False,
@@ -497,7 +500,7 @@ Je vais faire suivre ta demande à notre équipe spécialisée qui te recontacte
                 "use_ai": True
             }
         
-        # ÉTAPE 7: Escalade automatique
+        # ÉTAPE 6: Escalade automatique
         escalade_type = ResponseValidator.validate_escalade_keywords(user_message)
         if escalade_type:
             return {
@@ -505,6 +508,16 @@ Je vais faire suivre ta demande à notre équipe spécialisée qui te recontacte
                 "priority_detected": "ESCALADE_AUTO",
                 "escalade_type": escalade_type,
                 "response": "🔄 ESCALADE AGENT ADMIN\n\n🕐 Notre équipe traite les demandes du lundi au vendredi, de 9h à 17h (hors pause déjeuner).\n👉 On te tiendra informé dès qu'on a du nouveau ✅",
+                "context": conversation_context
+            }
+        
+        # ÉTAPE 7: Si on arrive ici, utiliser le bloc n8n s'il existe (même si générique)
+        if matched_bloc_response and matched_bloc_response.strip():
+            logger.info("✅ UTILISATION BLOC N8N - Fallback sur bloc n8n")
+            return {
+                "use_matched_bloc": True,
+                "priority_detected": "N8N_BLOC_FALLBACK",
+                "response": matched_bloc_response,
                 "context": conversation_context
             }
         
@@ -602,6 +615,16 @@ async def process_message(request: Request):
             response_type = "exact_match_enforced"
             escalade_required = False
             
+        elif priority_result.get("priority_detected") == "N8N_BLOC_DETECTED":
+            final_response = priority_result["response"]
+            response_type = "n8n_bloc_used"
+            escalade_required = False
+            
+        elif priority_result.get("priority_detected") == "N8N_BLOC_FALLBACK":
+            final_response = priority_result["response"]
+            response_type = "n8n_bloc_fallback"
+            escalade_required = False
+            
         elif priority_result.get("priority_detected") == "CPF_BLOQUE_CONFIRME":
             final_response = priority_result["response"]
             response_type = "cpf_blocked_confirmed"
@@ -628,12 +651,12 @@ async def process_message(request: Request):
             escalade_required = False
             
         elif priority_result.get("priority_detected") == "FOLLOW_UP_CONVERSATION":
-            final_response = None # Sera géré par l'IA
+            final_response = None  # Sera géré par l'IA
             response_type = "follow_up_ai_handled"
             escalade_required = False
             
         elif priority_result.get("priority_detected") == "PAIEMENT_SUIVI":
-            final_response = None # Sera géré par l'IA
+            final_response = None  # Sera géré par l'IA
             response_type = "paiement_suivi_ai_handled"
             escalade_required = False
             
@@ -646,11 +669,6 @@ async def process_message(request: Request):
             final_response = priority_result["response"]
             response_type = "paiement_fallback"
             escalade_required = True
-            
-        elif priority_result.get("priority_detected") == "BLOC_MATCHE":
-            final_response = priority_result["response"]
-            response_type = "bloc_matched"
-            escalade_required = False
             
         else:
             # Utiliser l'IA pour une réponse contextuelle ou fallback
@@ -727,3 +745,7 @@ On te tiendra informé dès que possible ✅"""
             "conversation_context": {"message_count": 0, "is_follow_up": False, "needs_greeting": True},
             "memory_summary": {"total_messages": 0, "user_messages": 0, "ai_messages": 0, "memory_size_chars": 0}
         }
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
