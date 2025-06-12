@@ -3,7 +3,7 @@ import logging
 from typing import Dict, Any, Optional
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from langchain.memory import ConversationBufferWindowMemory
+from langchain.memory import ConversationBufferMemory
 import json
 import re
 
@@ -27,8 +27,32 @@ os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
 if not os.environ.get("OPENAI_API_KEY"):
     raise ValueError("OPENAI_API_KEY is not set in environment variables")
 
-# Store pour la mémoire des conversations avec Window Buffer
-memory_store: Dict[str, ConversationBufferWindowMemory] = {}
+# Store pour la mémoire des conversations
+memory_store: Dict[str, ConversationBufferMemory] = {}
+
+class MemoryManager:
+    """Gestionnaire de mémoire optimisé pour limiter la taille"""
+    
+    @staticmethod
+    def trim_memory(memory: ConversationBufferMemory, max_messages: int = 15):
+        """Limite la mémoire aux N derniers messages pour économiser les tokens"""
+        messages = memory.chat_memory.messages
+        
+        if len(messages) > max_messages:
+            # Garder seulement les max_messages derniers
+            memory.chat_memory.messages = messages[-max_messages:]
+            logger.info(f"Memory trimmed to {max_messages} messages")
+    
+    @staticmethod
+    def get_memory_summary(memory: ConversationBufferMemory) -> Dict[str, Any]:
+        """Retourne un résumé de la mémoire"""
+        messages = memory.chat_memory.messages
+        return {
+            "total_messages": len(messages),
+            "user_messages": len([m for m in messages if hasattr(m, 'type') and m.type == 'human']),
+            "ai_messages": len([m for m in messages if hasattr(m, 'type') and m.type == 'ai']),
+            "memory_size_chars": sum(len(str(m.content)) for m in messages)
+        }
 
 class ResponseValidator:
     """Classe pour valider et nettoyer les réponses"""
@@ -66,7 +90,7 @@ class MessageProcessor:
     """Classe principale pour traiter les messages avec contexte"""
 
     @staticmethod
-    def analyze_conversation_context(user_message: str, memory: ConversationBufferWindowMemory) -> Dict[str, Any]:
+    def analyze_conversation_context(user_message: str, memory: ConversationBufferMemory) -> Dict[str, Any]:
         """Analyse le contexte de la conversation pour adapter la réponse"""
         
         # Récupérer l'historique
@@ -86,8 +110,8 @@ class MessageProcessor:
         # Analyser le sujet précédent dans l'historique
         previous_topic = None
         if message_count > 0:
-            # Chercher dans les derniers messages (limité par window)
-            for msg in reversed(history[-4:]):  # Regarder les 4 derniers messages
+            # Chercher dans les derniers messages
+            for msg in reversed(history[-6:]):  # Regarder les 6 derniers messages
                 content = str(msg.content).lower()
                 if "ambassadeur" in content or "commission" in content:
                     previous_topic = "ambassadeur"
@@ -258,21 +282,26 @@ async def process_message(request: Request):
         user_message = ResponseValidator.clean_response(user_message)
         matched_bloc_response = ResponseValidator.clean_response(matched_bloc_response)
 
-        # Gestion de la mémoire conversation avec Window Buffer
+        # Gestion de la mémoire conversation
         if wa_id not in memory_store:
-            memory_store[wa_id] = ConversationBufferWindowMemory(
-                k=15,  # Garde les 15 derniers messages (30 au total avec réponses)
+            memory_store[wa_id] = ConversationBufferMemory(
                 memory_key="history",
                 return_messages=True
             )
 
         memory = memory_store[wa_id]
         
-        # NOUVEAU : Analyser le contexte de conversation
+        # NOUVEAU : Optimiser la mémoire en limitant la taille
+        MemoryManager.trim_memory(memory, max_messages=15)
+        
+        # Analyser le contexte de conversation
         conversation_context = MessageProcessor.analyze_conversation_context(user_message, memory)
         
+        # Résumé mémoire pour logs
+        memory_summary = MemoryManager.get_memory_summary(memory)
+        
         logger.info(f"[{wa_id}] Conversation context: {conversation_context}")
-        logger.info(f"[{wa_id}] Window memory size: {len(memory.chat_memory.messages)} messages")
+        logger.info(f"[{wa_id}] Memory summary: {memory_summary}")
 
         # Ajouter le message utilisateur à la mémoire
         memory.chat_memory.add_user_message(user_message)
@@ -337,6 +366,9 @@ On te tiendra informé dès que possible ✅"""
         if final_response:
             memory.chat_memory.add_ai_message(final_response)
 
+        # Optimiser la mémoire après ajout
+        MemoryManager.trim_memory(memory, max_messages=15)
+
         # Construction de la réponse finale avec contexte
         response_data = {
             "matched_bloc_response": final_response,
@@ -348,11 +380,11 @@ On te tiendra informé dès que possible ✅"""
             "processed_message": user_message,
             "response_length": len(final_response) if final_response else 0,
             "session_id": wa_id,
-            "conversation_context": conversation_context,  # NOUVEAU : contexte ajouté
-            "memory_window_size": len(memory.chat_memory.messages)  # NOUVEAU : taille window
+            "conversation_context": conversation_context,
+            "memory_summary": memory_summary  # NOUVEAU : résumé mémoire
         }
 
-        logger.info(f"[{wa_id}] Response generated: type={response_type}, escalade={escalade_required}, context={conversation_context}, memory_size={len(memory.chat_memory.messages)}")
+        logger.info(f"[{wa_id}] Response generated: type={response_type}, escalade={escalade_required}, memory={memory_summary}")
 
         return response_data
 
@@ -376,7 +408,7 @@ On te tiendra informé dès que possible ✅"""
             "response_length": 150,
             "session_id": "error_session",
             "conversation_context": {"message_count": 0, "is_follow_up": False, "needs_greeting": True},
-            "memory_window_size": 0
+            "memory_summary": {"total_messages": 0, "user_messages": 0, "ai_messages": 0, "memory_size_chars": 0}
         }
 
 @app.post("/clear_memory/{wa_id}")
@@ -408,23 +440,26 @@ async def clear_all_memory():
 
 @app.get("/memory_status")
 async def memory_status():
-    """Retourne le statut de la mémoire avec info Window Buffer"""
+    """Retourne le statut de la mémoire avec optimisations"""
     try:
         sessions = {}
+        total_memory_chars = 0
+        
         for wa_id, memory in memory_store.items():
-            messages = memory.load_memory_variables({}).get("history", "")
+            memory_summary = MemoryManager.get_memory_summary(memory)
             sessions[wa_id] = {
-                "message_count": len(memory.chat_memory.messages),
-                "window_size": memory.k,  # Taille de la fenêtre
+                **memory_summary,
                 "last_interaction": "recent"  # Pourrait être enrichi avec timestamp
             }
+            total_memory_chars += memory_summary["memory_size_chars"]
 
         return {
             "active_sessions": len(memory_store),
-            "memory_type": "ConversationBufferWindowMemory",
-            "window_size": 15,
+            "memory_type": "ConversationBufferMemory (Optimized)",
+            "max_messages_per_session": 15,
             "sessions": sessions,
-            "total_memory_size": sum(len(str(m.chat_memory.messages)) for m in memory_store.values())
+            "total_memory_size_chars": total_memory_chars,
+            "optimization": "Auto-trim to 15 messages"
         }
     except Exception as e:
         logger.error(f"Error getting memory status: {str(e)}")
@@ -438,8 +473,8 @@ async def health_check():
         "version": "4.3",
         "openai_configured": bool(os.environ.get("OPENAI_API_KEY")),
         "active_sessions": len(memory_store),
-        "memory_type": "ConversationBufferWindowMemory",
-        "window_size": 15
+        "memory_type": "ConversationBufferMemory (Optimized)",
+        "memory_optimization": "Auto-trim to 15 messages"
     }
 
 if __name__ == "__main__":
