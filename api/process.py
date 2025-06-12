@@ -11,7 +11,7 @@ import re
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="JAK Company AI Agent API", version="4.4")
+app = FastAPI(title="JAK Company AI Agent API", version="4.5")
 
 # Configuration CORS pour permettre les tests locaux
 app.add_middleware(
@@ -176,7 +176,44 @@ class MessageProcessor:
 
         message_lower = user_message.lower()
 
-        # RÈGLE 1: DÉTECTION URGENCE PAIEMENT OPCO (NOUVELLE)
+        # RÈGLE 1: DÉTECTION URGENCE CPF (NOUVELLE)
+        cpf_urgency_patterns = [
+            "cpf", "6 mois", "7 mois", "8 mois", "9 mois", "10 mois",
+            "plus de 45 jours", "ca fait des mois", "ça fait des mois",
+            "depuis des mois"
+        ]
+        
+        # Détecter si CPF + délai dépassé
+        has_cpf = "cpf" in message_lower or "compte personnel formation" in message_lower
+        has_long_delay = any(pattern in message_lower for pattern in [
+            "6 mois", "7 mois", "8 mois", "9 mois", "10 mois", "11 mois", "12 mois",
+            "plus de 45 jours", "ca fait des mois", "ça fait des mois", "depuis des mois"
+        ])
+        
+        if has_cpf and has_long_delay:
+            return {
+                "use_matched_bloc": False,
+                "priority_detected": "URGENCE_PAIEMENT_CPF",
+                "response": """🚨 URGENCE DÉTECTÉE - Délai CPF largement dépassé !
+
+6 mois pour un CPF, c'est bien au-delà des 45 jours réglementaires ! 😱
+
+🔄 Je fais remonter ton dossier en URGENCE ABSOLUE à notre équipe administrative.
+
+📞 Tu vas être contacté dans les 24h maximum pour un suivi immédiat.
+
+⚡ Actions immédiates :
+• Escalade prioritaire du dossier
+• Vérification des émargements 
+• Contact direct OPCO/financeur
+• Relance administrative renforcée
+
+Notre équipe va investiguer en urgence ! 🚨""",
+                "context": conversation_context,
+                "escalade_type": "urgence_cpf"
+            }
+
+        # RÈGLE 2: DÉTECTION URGENCE PAIEMENT OPCO
         opco_urgency_patterns = [
             "8 mois", "9 mois", "10 mois", "11 mois", "12 mois",
             "plus de 6 mois", "ca fait des mois", "ça fait des mois",
@@ -207,7 +244,7 @@ Notre équipe va investiguer immédiatement ! ⚡""",
                 "escalade_type": "urgence_paiement"
             }
 
-        # RÈGLE 2: Détection problème paiement formation (PRIORITÉ ABSOLUE)
+        # RÈGLE 3: Détection problème paiement formation (PRIORITÉ ABSOLUE)
         payment_keywords = [
             "pas été payé", "rien reçu", "virement", "attends",
             "paiement", "argent", "retard", "promesse", "veux être payé",
@@ -237,7 +274,7 @@ Notre équipe va investiguer immédiatement ! ⚡""",
                         "context": conversation_context
                     }
 
-        # RÈGLE 3: Agressivité détectée - CORRIGÉE
+        # RÈGLE 4: Agressivité détectée - CORRIGÉE
         if MessageProcessor.is_aggressive(user_message):
             return {
                 "use_matched_bloc": False,
@@ -246,7 +283,7 @@ Notre équipe va investiguer immédiatement ! ⚡""",
                 "context": conversation_context
             }
 
-        # RÈGLE 4: Messages de suivi - Privilégier l'IA pour contexte
+        # RÈGLE 5: Messages de suivi - Privilégier l'IA pour contexte
         if conversation_context["is_follow_up"] and conversation_context["message_count"] > 0:
             return {
                 "use_matched_bloc": False,
@@ -256,7 +293,7 @@ Notre équipe va investiguer immédiatement ! ⚡""",
                 "use_ai": True
             }
 
-        # RÈGLE 5: Si matched_bloc_response existe ET ce n'est pas un suivi, l'utiliser
+        # RÈGLE 6: Si matched_bloc_response existe ET ce n'est pas un suivi, l'utiliser
         if matched_bloc_response and matched_bloc_response.strip() and not conversation_context["is_follow_up"]:
             return {
                 "use_matched_bloc": True,
@@ -265,7 +302,7 @@ Notre équipe va investiguer immédiatement ! ⚡""",
                 "context": conversation_context
             }
 
-        # RÈGLE 6: Escalade automatique si nécessaire
+        # RÈGLE 7: Escalade automatique si nécessaire
         escalade_type = ResponseValidator.validate_escalade_keywords(user_message)
         if escalade_type:
             return {
@@ -363,6 +400,11 @@ async def process_message(request: Request):
             final_response = priority_result["response"]
             response_type = "exact_match_enforced"
             escalade_required = False
+
+        elif priority_result.get("priority_detected") == "URGENCE_PAIEMENT_CPF":
+            final_response = priority_result["response"]
+            response_type = "urgence_cpf_detected"
+            escalade_required = True
 
         elif priority_result.get("priority_detected") == "URGENCE_PAIEMENT_OPCO":
             final_response = priority_result["response"]
@@ -526,7 +568,7 @@ async def health_check():
     """Endpoint de santé pour vérifier que l'API fonctionne"""
     return {
         "status": "healthy",
-        "version": "4.4",
+        "version": "4.5",
         "openai_configured": bool(os.environ.get("OPENAI_API_KEY")),
         "active_sessions": len(memory_store),
         "memory_type": "ConversationBufferMemory (Optimized)",
