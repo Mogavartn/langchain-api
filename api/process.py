@@ -3,7 +3,7 @@ import logging
 from typing import Dict, Any, Optional
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from langchain.memory import ConversationBufferMemory
+from langchain.memory import ConversationBufferWindowMemory
 import json
 import re
 
@@ -11,7 +11,7 @@ import re
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="JAK Company AI Agent API", version="4.2")
+app = FastAPI(title="JAK Company AI Agent API", version="4.3")
 
 # Configuration CORS pour permettre les tests locaux
 app.add_middleware(
@@ -27,8 +27,8 @@ os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
 if not os.environ.get("OPENAI_API_KEY"):
     raise ValueError("OPENAI_API_KEY is not set in environment variables")
 
-# Store pour la mémoire des conversations
-memory_store: Dict[str, ConversationBufferMemory] = {}
+# Store pour la mémoire des conversations avec Window Buffer
+memory_store: Dict[str, ConversationBufferWindowMemory] = {}
 
 class ResponseValidator:
     """Classe pour valider et nettoyer les réponses"""
@@ -66,7 +66,7 @@ class MessageProcessor:
     """Classe principale pour traiter les messages avec contexte"""
 
     @staticmethod
-    def analyze_conversation_context(user_message: str, memory: ConversationBufferMemory) -> Dict[str, Any]:
+    def analyze_conversation_context(user_message: str, memory: ConversationBufferWindowMemory) -> Dict[str, Any]:
         """Analyse le contexte de la conversation pour adapter la réponse"""
         
         # Récupérer l'historique
@@ -77,7 +77,8 @@ class MessageProcessor:
         follow_up_indicators = [
             "comment", "pourquoi", "vous pouvez", "tu peux", "aide", "démarrer",
             "oui", "ok", "d'accord", "et après", "ensuite", "comment faire",
-            "vous pouvez m'aider", "tu peux m'aider", "comment ça marche"
+            "vous pouvez m'aider", "tu peux m'aider", "comment ça marche",
+            "ça marche comment", "pour les contacts"
         ]
         
         is_follow_up = any(indicator in user_message.lower() for indicator in follow_up_indicators)
@@ -85,7 +86,7 @@ class MessageProcessor:
         # Analyser le sujet précédent dans l'historique
         previous_topic = None
         if message_count > 0:
-            # Chercher dans les derniers messages
+            # Chercher dans les derniers messages (limité par window)
             for msg in reversed(history[-4:]):  # Regarder les 4 derniers messages
                 content = str(msg.content).lower()
                 if "ambassadeur" in content or "commission" in content:
@@ -105,6 +106,45 @@ class MessageProcessor:
             "needs_greeting": message_count == 0,
             "conversation_flow": "continuing" if message_count > 0 else "starting"
         }
+
+    @staticmethod
+    def is_aggressive(message: str) -> bool:
+        """Détecte l'agressivité en évitant les faux positifs"""
+        
+        message_lower = message.lower()
+        
+        # Liste des mots agressifs avec leurs contextes d'exclusion
+        aggressive_patterns = [
+            ("merde", []),  # Pas d'exclusion
+            ("nul", ["nul part", "nulle part"]),  # Exclure "nul part"
+            ("énervez", []),
+            ("batards", []),
+            ("putain", []),
+            ("chier", [])
+        ]
+        
+        # Vérification spéciale pour "con" - doit être un mot isolé
+        if " con " in f" {message_lower} " or message_lower.startswith("con ") or message_lower.endswith(" con"):
+            # Exclure les mots contenant "con" comme "contacts", "conseil", "condition", etc.
+            exclusions = [
+                "contacts", "contact", "conseil", "conseils", "condition", "conditions", 
+                "concernant", "concerne", "construction", "consultation", "considère",
+                "consommation", "consommer", "constitue", "contenu", "contexte",
+                "contrôle", "contraire", "confiance", "confirmation", "conformité"
+            ]
+            
+            # Vérifier qu'il n'y a pas ces mots dans le message
+            if not any(exclusion in message_lower for exclusion in exclusions):
+                return True
+        
+        # Vérifier les autres mots agressifs
+        for aggressive_word, exclusions in aggressive_patterns:
+            if aggressive_word in message_lower:
+                # Vérifier que ce n'est pas dans un contexte d'exclusion
+                if not any(exclusion in message_lower for exclusion in exclusions):
+                    return True
+        
+        return False
 
     @staticmethod
     def detect_priority_rules(user_message: str, matched_bloc_response: str, conversation_context: Dict[str, Any]) -> Dict[str, Any]:
@@ -128,9 +168,8 @@ class MessageProcessor:
                     "context": conversation_context
                 }
 
-        # RÈGLE 2: Agressivité détectée
-        aggressive_keywords = ["merde", "con", "nul", "énervez", "batards"]
-        if any(keyword in message_lower for keyword in aggressive_keywords):
+        # RÈGLE 2: Agressivité détectée - CORRIGÉE pour éviter les faux positifs
+        if MessageProcessor.is_aggressive(user_message):
             return {
                 "use_matched_bloc": False,
                 "priority_detected": "AGRESSIVITE",
@@ -219,9 +258,10 @@ async def process_message(request: Request):
         user_message = ResponseValidator.clean_response(user_message)
         matched_bloc_response = ResponseValidator.clean_response(matched_bloc_response)
 
-        # Gestion de la mémoire conversation
+        # Gestion de la mémoire conversation avec Window Buffer
         if wa_id not in memory_store:
-            memory_store[wa_id] = ConversationBufferMemory(
+            memory_store[wa_id] = ConversationBufferWindowMemory(
+                k=15,  # Garde les 15 derniers messages (30 au total avec réponses)
                 memory_key="history",
                 return_messages=True
             )
@@ -232,6 +272,7 @@ async def process_message(request: Request):
         conversation_context = MessageProcessor.analyze_conversation_context(user_message, memory)
         
         logger.info(f"[{wa_id}] Conversation context: {conversation_context}")
+        logger.info(f"[{wa_id}] Window memory size: {len(memory.chat_memory.messages)} messages")
 
         # Ajouter le message utilisateur à la mémoire
         memory.chat_memory.add_user_message(user_message)
@@ -307,10 +348,11 @@ On te tiendra informé dès que possible ✅"""
             "processed_message": user_message,
             "response_length": len(final_response) if final_response else 0,
             "session_id": wa_id,
-            "conversation_context": conversation_context  # NOUVEAU : contexte ajouté
+            "conversation_context": conversation_context,  # NOUVEAU : contexte ajouté
+            "memory_window_size": len(memory.chat_memory.messages)  # NOUVEAU : taille window
         }
 
-        logger.info(f"[{wa_id}] Response generated: type={response_type}, escalade={escalade_required}, context={conversation_context}")
+        logger.info(f"[{wa_id}] Response generated: type={response_type}, escalade={escalade_required}, context={conversation_context}, memory_size={len(memory.chat_memory.messages)}")
 
         return response_data
 
@@ -333,7 +375,8 @@ On te tiendra informé dès que possible ✅"""
             "processed_message": "error_occurred",
             "response_length": 150,
             "session_id": "error_session",
-            "conversation_context": {"message_count": 0, "is_follow_up": False, "needs_greeting": True}
+            "conversation_context": {"message_count": 0, "is_follow_up": False, "needs_greeting": True},
+            "memory_window_size": 0
         }
 
 @app.post("/clear_memory/{wa_id}")
@@ -365,18 +408,21 @@ async def clear_all_memory():
 
 @app.get("/memory_status")
 async def memory_status():
-    """Retourne le statut de la mémoire"""
+    """Retourne le statut de la mémoire avec info Window Buffer"""
     try:
         sessions = {}
         for wa_id, memory in memory_store.items():
             messages = memory.load_memory_variables({}).get("history", "")
             sessions[wa_id] = {
                 "message_count": len(memory.chat_memory.messages),
+                "window_size": memory.k,  # Taille de la fenêtre
                 "last_interaction": "recent"  # Pourrait être enrichi avec timestamp
             }
 
         return {
             "active_sessions": len(memory_store),
+            "memory_type": "ConversationBufferWindowMemory",
+            "window_size": 15,
             "sessions": sessions,
             "total_memory_size": sum(len(str(m.chat_memory.messages)) for m in memory_store.values())
         }
@@ -389,9 +435,11 @@ async def health_check():
     """Endpoint de santé pour vérifier que l'API fonctionne"""
     return {
         "status": "healthy",
-        "version": "4.2",
+        "version": "4.3",
         "openai_configured": bool(os.environ.get("OPENAI_API_KEY")),
-        "active_sessions": len(memory_store)
+        "active_sessions": len(memory_store),
+        "memory_type": "ConversationBufferWindowMemory",
+        "window_size": 15
     }
 
 if __name__ == "__main__":
