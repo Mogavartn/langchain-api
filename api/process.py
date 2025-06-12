@@ -237,6 +237,120 @@ class MessageProcessor:
             "context": conversation_context,
             "use_ai": True
         }
+    # AJOUT dans Process.py - Gestion contexte OPCO/délais
+
+class MessageProcessor:
+    @staticmethod
+    def detect_priority_rules(user_message: str, matched_bloc_response: str, conversation_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Applique les règles de priorité avec prise en compte du contexte"""
+
+        message_lower = user_message.lower()
+
+        # RÈGLE 1: DÉTECTION URGENCE PAIEMENT OPCO (NOUVELLE)
+        opco_urgency_patterns = [
+            "8 mois", "9 mois", "10 mois", "11 mois", "12 mois",
+            "plus de 6 mois", "jamais reçu"
+        ]
+        
+        if ("opco" in message_lower and 
+            any(pattern in message_lower for pattern in opco_urgency_patterns)):
+            
+            return {
+                "use_matched_bloc": False,
+                "priority_detected": "URGENCE_PAIEMENT_OPCO",
+                "response": """🚨 URGENCE DÉTECTÉE - Délai OPCO dépassé
+
+8 mois avec un OPCO, c'est clairement anormal ! Le délai maximum est de 6 mois.
+
+🔄 Je fais remonter ton dossier en URGENCE à notre équipe administrative qui va faire un suivi immédiat.
+
+📞 Tu vas être contacté dans les 24h pour faire le point sur ton dossier.
+
+🕐 En attendant, peux-tu nous transmettre :
+• Ton nom complet
+• Le nom de la formation
+• Les dates de formation
+
+Notre équipe va investiguer immédiatement ! ⚡""",
+                "context": conversation_context,
+                "escalade_type": "urgence_paiement"
+            }
+
+        # RÈGLE 2: Détection problème paiement formation (PRIORITÉ ABSOLUE)
+        payment_keywords = [
+            "pas été payé", "rien reçu", "virement", "attends",
+            "paiement", "argent", "retard", "promesse", "veux être payé",
+            "payé pour ma formation", "être payé pour"
+        ]
+
+        if any(keyword in message_lower for keyword in payment_keywords):
+            # Si un bloc est déjà matché pour le paiement, le garder
+            if matched_bloc_response and ("paiement" in matched_bloc_response.lower() or "délai" in matched_bloc_response.lower()):
+                
+                # NOUVELLE LOGIQUE: Éviter les répétitions
+                if conversation_context["message_count"] > 0:
+                    # Si c'est un message de suivi sur le paiement, personnaliser
+                    return {
+                        "use_matched_bloc": False,
+                        "priority_detected": "PAIEMENT_SUIVI",
+                        "response": None,  # Laisser l'IA gérer avec contexte
+                        "context": conversation_context,
+                        "use_ai": True
+                    }
+                else:
+                    # Premier message paiement = utiliser le bloc
+                    return {
+                        "use_matched_bloc": True,
+                        "priority_detected": "PAIEMENT_FORMATION",
+                        "response": matched_bloc_response,
+                        "context": conversation_context
+                    }
+
+        # RÈGLE 3: Agressivité détectée - CORRIGÉE
+        if MessageProcessor.is_aggressive(user_message):
+            return {
+                "use_matched_bloc": False,
+                "priority_detected": "AGRESSIVITE",
+                "response": "Être impoli ne fera pas avancer la situation plus vite. Bien au contraire. Souhaites-tu que je te propose un poème ou une chanson d'amour pour apaiser ton cœur ? 💌",
+                "context": conversation_context
+            }
+
+        # RÈGLE 4: Messages de suivi - Privilégier l'IA pour contexte
+        if conversation_context["is_follow_up"] and conversation_context["message_count"] > 0:
+            return {
+                "use_matched_bloc": False,
+                "priority_detected": "FOLLOW_UP_CONVERSATION",
+                "response": None,  # Laisser l'IA gérer
+                "context": conversation_context,
+                "use_ai": True
+            }
+
+        # RÈGLE 5: Si matched_bloc_response existe ET ce n'est pas un suivi, l'utiliser
+        if matched_bloc_response and matched_bloc_response.strip() and not conversation_context["is_follow_up"]:
+            return {
+                "use_matched_bloc": True,
+                "priority_detected": "BLOC_MATCHE",
+                "response": matched_bloc_response,
+                "context": conversation_context
+            }
+
+        # RÈGLE 6: Escalade automatique si nécessaire
+        escalade_type = ResponseValidator.validate_escalade_keywords(user_message)
+        if escalade_type:
+            return {
+                "use_matched_bloc": False,
+                "priority_detected": "ESCALADE_AUTO",
+                "escalade_type": escalade_type,
+                "response": "🔄 ESCALADE AGENT ADMIN\n\n🕐 Notre équipe traite les demandes du lundi au vendredi, de 9h à 17h (hors pause déjeuner).\n📧 On te tiendra informé dès qu'on a du nouveau ✅",
+                "context": conversation_context
+            }
+
+        return {
+            "use_matched_bloc": False, 
+            "priority_detected": "NONE",
+            "context": conversation_context,
+            "use_ai": True
+        }
 
 @app.post("/")
 async def process_message(request: Request):
