@@ -283,7 +283,7 @@ class PaymentContextProcessor:
                         "response": """On comprend parfaitement ta frustration. Ce dossier fait partie des quelques cas (moins de 50 sur plus de 2500) bloqués depuis la réforme CPF de février 2025. Même nous n'avons pas été payés. Le blocage est purement administratif, et les délais sont impossibles à prévoir. On te tiendra informé dès qu'on a du nouveau. Inutile de relancer entre-temps 🙏
 
 Tous les éléments nécessaires ont bien été transmis à l'organisme de contrôle 📋🔍
-Mais le problème, c'est que la Caisse des Dépôts demande des documents que le centre de formation envoie sous une semaine...
+Mais le problème, c'est que la Caisse des Dépôts demande des documents que le centre de formation envoie sous une semaine…
 Et ensuite, ils prennent parfois jusqu'à 2 mois pour demander un nouveau document, sans donner de réponse entre-temps.
 
 ✅ On accompagne au maximum le centre de formation pour que tout rentre dans l'ordre.
