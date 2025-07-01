@@ -11,7 +11,7 @@ import re
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="JAK Company AI Agent API", version="8.0")
+app = FastAPI(title="JAK Company AI Agent API", version="8.1")
 
 # Configuration CORS pour permettre les tests locaux
 app.add_middleware(
@@ -113,7 +113,7 @@ async def health_check():
     """Endpoint de santé pour vérifier que l'API fonctionne"""
     return {
         "status": "healthy",
-        "version": "8.0",
+        "version": "8.1",
         "openai_configured": bool(os.environ.get("OPENAI_API_KEY")),
         "active_sessions": len(memory_store),
         "memory_type": "ConversationBufferMemory (Optimized)",
@@ -126,7 +126,8 @@ async def health_check():
             "Enhanced payment context processing",
             "Corrected indentation issues",
             "Added ambassadeur type detection",
-            "Improved ambassadeur explanation vs inscription logic"
+            "Improved ambassadeur explanation vs inscription logic",
+            "Fixed ambassadeur context management - no more CPF confusion"
         ]
     }
 
@@ -188,11 +189,19 @@ class ConversationContextManager:
         last_bot_message = ""
         awaiting_cpf_info = False
         awaiting_financing_info = False
+        awaiting_ambassadeur_info = False  # NOUVEAU CONTEXT
         
         if message_count > 0:
             # Chercher dans les derniers messages
             for msg in reversed(history[-6:]):  # Regarder les 6 derniers messages
                 content = str(msg.content).lower()
+                
+                # NOUVELLE DÉTECTION : Contexte ambassadeur (PRIORITÉ ABSOLUE)
+                if "tu veux en savoir plus sur comment devenir ambassadeur" in content:
+                    awaiting_ambassadeur_info = True
+                    last_bot_message = str(msg.content)
+                    previous_topic = "ambassadeur_explication"
+                    break  # IMPORTANT: sortir de la boucle pour éviter d'autres détections
                 
                 # Détecter si on attend des infos spécifiques
                 if "comment la formation a été financée" in content:
@@ -208,16 +217,17 @@ class ConversationContextManager:
                     awaiting_cpf_info = True
                     last_bot_message = str(msg.content)
                 
-                # Détecter les sujets principaux
-                if "ambassadeur" in content or "commission" in content:
-                    previous_topic = "ambassadeur"
-                    break
-                elif "paiement" in content or "formation" in content:
-                    previous_topic = "paiement"
-                    break
-                elif "cpf" in content:
-                    previous_topic = "cpf"
-                    break
+                # Détecter les sujets principaux (seulement si pas de contexte spécifique)
+                if not awaiting_ambassadeur_info and not awaiting_cpf_info and not awaiting_financing_info:
+                    if "ambassadeur" in content or "commission" in content:
+                        previous_topic = "ambassadeur"
+                        break
+                    elif "paiement" in content or "formation" in content:
+                        previous_topic = "paiement"
+                        break
+                    elif "cpf" in content:
+                        previous_topic = "cpf"
+                        break
         
         return {
             "message_count": message_count,
@@ -227,6 +237,7 @@ class ConversationContextManager:
             "conversation_flow": "continuing" if message_count > 0 else "starting",
             "awaiting_cpf_info": awaiting_cpf_info,
             "awaiting_financing_info": awaiting_financing_info,
+            "awaiting_ambassadeur_info": awaiting_ambassadeur_info,  # NOUVEAU
             "last_bot_message": last_bot_message
         }
 
@@ -369,7 +380,7 @@ class MessageProcessor:
 
     @staticmethod
     def detect_ambassadeur_type(message: str) -> Optional[str]:
-        """Détecte le type de demande ambassadeur - NOUVELLE MÉTHODE"""
+        """Détecte le type de demande ambassadeur"""
         message_lower = message.lower()
         
         # Questions d'explication (priorité haute)
@@ -399,9 +410,53 @@ class MessageProcessor:
 
     @staticmethod
     def detect_priority_rules(user_message: str, matched_bloc_response: str, conversation_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Applique les règles de priorité avec prise en compte du contexte - VERSION CORRIGÉE V8"""
+        """Applique les règles de priorité avec prise en compte du contexte - VERSION CORRIGÉE V8.1"""
         
         message_lower = user_message.lower()
+        
+        # ÉTAPE 0: NOUVELLE - Traitement du contexte ambassadeur en attente (PRIORITÉ ABSOLUE)
+        if conversation_context.get("awaiting_ambassadeur_info"):
+            # Si l'utilisateur confirme qu'il veut en savoir plus
+            if any(word in message_lower for word in ['oui', 'yes', 'ok', 'd\'accord', 'exact', 'je veux', 'intéresse']):
+                return {
+                    "use_matched_bloc": False,
+                    "priority_detected": "AMBASSADEUR_SUITE_INSCRIPTION",
+                    "response": """Parfait ! 😄 
+
+Je vais t'expliquer comment démarrer :
+
+✅ Étape 1 : Tu t'abonnes à nos réseaux
+📱 Insta : https://hi.switchy.io/InstagramWeiWei
+📱 Snap : https://hi.switchy.io/SnapChatWeiWei
+
+✅ Étape 2 : Tu nous envoies une liste de contacts intéressés (nom, prénom, téléphone ou email).
+➕ Si c'est une entreprise ou un pro, le SIRET est un petit bonus 😊
+🔗 Formulaire ici : https://mrqz.to/AffiliationPromotion
+
+✅ Étape 3 : Si un dossier est validé, tu touches une commission jusqu'à 60 % 💰
+Et tu peux même être payé sur ton compte perso (jusqu'à 3000 €/an et 3 virements)
+
+Tu veux qu'on t'aide à démarrer ou tu as des questions ? 📝""",
+                    "context": conversation_context,
+                    "escalade_type": None
+                }
+            # Si l'utilisateur refuse ou pose une autre question
+            elif any(word in message_lower for word in ['non', 'no', 'pas intéressé', 'pas interessé', 'jamais']):
+                return {
+                    "use_matched_bloc": False,
+                    "priority_detected": "AMBASSADEUR_PAS_INTERESSE",
+                    "response": """Pas de souci ! 😊
+
+Si tu changes d'avis ou si tu as d'autres questions, n'hésite pas à revenir vers nous.
+
+Y a-t-il autre chose sur quoi je peux t'aider ? 👍""",
+                    "context": conversation_context,
+                    "escalade_type": None
+                }
+            # Si c'est une autre question, continuer avec la logique normale
+            else:
+                # Reset du contexte ambassadeur pour traiter la nouvelle question
+                conversation_context["awaiting_ambassadeur_info"] = False
         
         # ÉTAPE 1: Traitement des réponses aux questions spécifiques en cours
         if conversation_context.get("awaiting_financing_info"):
@@ -444,8 +499,8 @@ On te tiendra informé dès qu'on a une réponse ✅""",
                     "awaiting_financing_info": True
                 }
         
-        # ÉTAPE 2: Traitement du contexte CPF bloqué
-        if conversation_context.get("awaiting_cpf_info"):
+        # ÉTAPE 2: Traitement du contexte CPF bloqué (avec protection contre contexte ambassadeur)
+        if conversation_context.get("awaiting_cpf_info") and not conversation_context.get("awaiting_ambassadeur_info"):
             return PaymentContextProcessor.handle_cpf_delay_context(0, user_message, conversation_context)
         
         # ÉTAPE 3: Agressivité (priorité haute pour couper court)
@@ -457,7 +512,7 @@ On te tiendra informé dès qu'on a une réponse ✅""",
                 "context": conversation_context
             }
         
-        # ÉTAPE 4: Gestion spécifique AMBASSADEUR - NOUVELLE LOGIQUE
+        # ÉTAPE 4: Gestion spécifique AMBASSADEUR
         if "ambassadeur" in message_lower:
             ambassadeur_type = MessageProcessor.detect_ambassadeur_type(user_message)
             
@@ -691,6 +746,16 @@ async def process_message(request: Request):
         elif priority_result.get("priority_detected") == "AMBASSADEUR_INSCRIPTION":
             final_response = priority_result["response"]
             response_type = "ambassadeur_inscription"
+            escalade_required = False
+            
+        elif priority_result.get("priority_detected") == "AMBASSADEUR_SUITE_INSCRIPTION":
+            final_response = priority_result["response"]
+            response_type = "ambassadeur_suite_inscription"
+            escalade_required = False
+            
+        elif priority_result.get("priority_detected") == "AMBASSADEUR_PAS_INTERESSE":
+            final_response = priority_result["response"]
+            response_type = "ambassadeur_pas_interesse"
             escalade_required = False
             
         elif priority_result.get("priority_detected") == "FOLLOW_UP_CONVERSATION":
