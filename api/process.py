@@ -11,7 +11,7 @@ import re
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="JAK Company AI Agent API", version="8.1")
+app = FastAPI(title="JAK Company AI Agent API", version="8.2")
 
 # Configuration CORS pour permettre les tests locaux
 app.add_middleware(
@@ -113,7 +113,7 @@ async def health_check():
     """Endpoint de santé pour vérifier que l'API fonctionne"""
     return {
         "status": "healthy",
-        "version": "8.1",
+        "version": "8.2",
         "openai_configured": bool(os.environ.get("OPENAI_API_KEY")),
         "active_sessions": len(memory_store),
         "memory_type": "ConversationBufferMemory (Optimized)",
@@ -127,7 +127,9 @@ async def health_check():
             "Corrected indentation issues",
             "Added ambassadeur type detection",
             "Improved ambassadeur explanation vs inscription logic",
-            "Fixed ambassadeur context management - no more CPF confusion"
+            "Fixed ambassadeur context management - no more CPF confusion",
+            "Enhanced memory debugging and robust pattern detection",
+            "Extended confirmation patterns for ambassadeur context"
         ]
     }
 
@@ -174,6 +176,11 @@ class ConversationContextManager:
         history = memory.chat_memory.messages
         message_count = len(history)
         
+        # LOGS DEBUG MÉMOIRE
+        logger.info(f"MÉMOIRE DEBUG: {message_count} messages dans l'historique")
+        for i, msg in enumerate(history[-5:]):  # 5 derniers messages
+            logger.info(f"Message {i}: Type={getattr(msg, 'type', 'unknown')}, Content={str(msg.content)[:100]}...")
+        
         # Analyser si c'est un message de suivi
         follow_up_indicators = [
             "comment", "pourquoi", "vous pouvez", "tu peux", "aide", "démarrer",
@@ -192,42 +199,70 @@ class ConversationContextManager:
         awaiting_ambassadeur_info = False  # NOUVEAU CONTEXT
         
         if message_count > 0:
-            # Chercher dans les derniers messages
-            for msg in reversed(history[-6:]):  # Regarder les 6 derniers messages
+            # Chercher dans les derniers messages (jusqu'à 10 pour être sûr)
+            for i, msg in enumerate(reversed(history[-10:])):  # Regarder les 10 derniers messages
                 content = str(msg.content).lower()
+                logger.info(f"ANALYSE MESSAGE {i}: {content[:150]}...")
                 
-                # NOUVELLE DÉTECTION : Contexte ambassadeur (PRIORITÉ ABSOLUE)
+                # DÉTECTION AMBASSADEUR AMÉLIORÉE - Patterns multiples
+                is_ambassadeur_context = False
+                
+                # Pattern principal
                 if "tu veux en savoir plus sur comment devenir ambassadeur" in content:
+                    is_ambassadeur_context = True
+                    logger.info("PATTERN 1 DÉTECTÉ: phrase complète ambassadeur")
+                # Pattern alternatif 1
+                elif "tu veux en savoir plus" in content and "ambassadeur" in content:
+                    is_ambassadeur_context = True
+                    logger.info("PATTERN 2 DÉTECTÉ: savoir plus + ambassadeur")
+                # Pattern alternatif 2 - si le message contient ambassadeur ET une question
+                elif "ambassadeur" in content and ("?" in content or "veux" in content):
+                    is_ambassadeur_context = True
+                    logger.info("PATTERN 3 DÉTECTÉ: ambassadeur + question")
+                # Pattern alternatif 3 - détecter les blocs ambassadeur explication
+                elif "partenaire de terrain" in content and "commission" in content:
+                    is_ambassadeur_context = True
+                    logger.info("PATTERN 4 DÉTECTÉ: bloc explication ambassadeur")
+                # Pattern alternatif 4 - détecter "gagner de l'argent simplement"
+                elif "gagner de l'argent simplement" in content:
+                    is_ambassadeur_context = True
+                    logger.info("PATTERN 5 DÉTECTÉ: gagner argent simplement")
+                
+                if is_ambassadeur_context:
                     awaiting_ambassadeur_info = True
                     last_bot_message = str(msg.content)
                     previous_topic = "ambassadeur_explication"
+                    logger.info(f"✅ CONTEXTE AMBASSADEUR CONFIRMÉ dans: {content[:100]}...")
                     break  # IMPORTANT: sortir de la boucle pour éviter d'autres détections
                 
-                # Détecter si on attend des infos spécifiques
+                # Détecter si on attend des infos spécifiques (CPF/financement)
                 if "comment la formation a été financée" in content:
                     awaiting_financing_info = True
                     last_bot_message = str(msg.content)
+                    logger.info("CONTEXTE FINANCEMENT DÉTECTÉ")
                     
                 if "environ quand la formation s'est terminée" in content:
                     awaiting_financing_info = True
                     last_bot_message = str(msg.content)
+                    logger.info("CONTEXTE DATE FORMATION DÉTECTÉ")
                 
                 # Détecter le contexte CPF bloqué
                 if "dossier cpf faisait partie des quelques cas bloqués" in content:
                     awaiting_cpf_info = True
                     last_bot_message = str(msg.content)
+                    logger.info("CONTEXTE CPF BLOQUÉ DÉTECTÉ")
                 
                 # Détecter les sujets principaux (seulement si pas de contexte spécifique)
                 if not awaiting_ambassadeur_info and not awaiting_cpf_info and not awaiting_financing_info:
                     if "ambassadeur" in content or "commission" in content:
                         previous_topic = "ambassadeur"
-                        break
                     elif "paiement" in content or "formation" in content:
                         previous_topic = "paiement"
-                        break
                     elif "cpf" in content:
                         previous_topic = "cpf"
-                        break
+        
+        # Logging final du contexte
+        logger.info(f"CONTEXTE FINAL: awaiting_ambassadeur={awaiting_ambassadeur_info}, awaiting_cpf={awaiting_cpf_info}, awaiting_financing={awaiting_financing_info}, topic={previous_topic}")
         
         return {
             "message_count": message_count,
@@ -410,14 +445,39 @@ class MessageProcessor:
 
     @staticmethod
     def detect_priority_rules(user_message: str, matched_bloc_response: str, conversation_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Applique les règles de priorité avec prise en compte du contexte - VERSION CORRIGÉE V8.1"""
+        """Applique les règles de priorité avec prise en compte du contexte - VERSION CORRIGÉE V8.2"""
         
         message_lower = user_message.lower()
         
         # ÉTAPE 0: NOUVELLE - Traitement du contexte ambassadeur en attente (PRIORITÉ ABSOLUE)
         if conversation_context.get("awaiting_ambassadeur_info"):
+            logger.info(f"🎯 TRAITEMENT CONTEXTE AMBASSADEUR: message='{user_message}'")
+            
+            # Patterns de confirmation étendus
+            confirmation_patterns = [
+                'oui', 'yes', 'ok', 'd\'accord', 'exact', 'je veux', 'intéresse', 
+                'ça m\'intéresse', 'ca m\'interesse', 'je veux savoir', 'oui je veux',
+                'oui je veux savoir', 'bien sûr', 'bien sur', 'parfait', 'super',
+                'oui ça m\'intéresse', 'oui ca m\'interesse', 'pourquoi pas',
+                'je suis intéressé', 'je suis interessé', 'allons-y', 'vas-y'
+            ]
+            
+            # Patterns de refus étendus  
+            refusal_patterns = [
+                'non', 'no', 'pas intéressé', 'pas interessé', 'jamais', 'pas pour moi',
+                'non merci', 'ça ne m\'intéresse pas', 'ca ne m\'interesse pas',
+                'pas maintenant', 'une autre fois', 'plus tard'
+            ]
+            
+            # Vérification si c'est une confirmation
+            is_confirmation = any(pattern in message_lower for pattern in confirmation_patterns)
+            is_refusal = any(pattern in message_lower for pattern in refusal_patterns)
+            
+            logger.info(f"ANALYSE RÉPONSE: is_confirmation={is_confirmation}, is_refusal={is_refusal}")
+            
             # Si l'utilisateur confirme qu'il veut en savoir plus
-            if any(word in message_lower for word in ['oui', 'yes', 'ok', 'd\'accord', 'exact', 'je veux', 'intéresse']):
+            if is_confirmation:
+                logger.info("✅ CONFIRMATION AMBASSADEUR DÉTECTÉE")
                 return {
                     "use_matched_bloc": False,
                     "priority_detected": "AMBASSADEUR_SUITE_INSCRIPTION",
@@ -440,8 +500,10 @@ Tu veux qu'on t'aide à démarrer ou tu as des questions ? 📝""",
                     "context": conversation_context,
                     "escalade_type": None
                 }
-            # Si l'utilisateur refuse ou pose une autre question
-            elif any(word in message_lower for word in ['non', 'no', 'pas intéressé', 'pas interessé', 'jamais']):
+            
+            # Si l'utilisateur refuse
+            elif is_refusal:
+                logger.info("❌ REFUS AMBASSADEUR DÉTECTÉ")
                 return {
                     "use_matched_bloc": False,
                     "priority_detected": "AMBASSADEUR_PAS_INTERESSE",
@@ -453,8 +515,10 @@ Y a-t-il autre chose sur quoi je peux t'aider ? 👍""",
                     "context": conversation_context,
                     "escalade_type": None
                 }
+            
             # Si c'est une autre question, continuer avec la logique normale
             else:
+                logger.info("🔄 AUTRE QUESTION DANS CONTEXTE AMBASSADEUR - RESET")
                 # Reset du contexte ambassadeur pour traiter la nouvelle question
                 conversation_context["awaiting_ambassadeur_info"] = False
         
