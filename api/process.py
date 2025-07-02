@@ -11,7 +11,7 @@ import re
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="JAK Company AI Agent API", version="7.0")
+app = FastAPI(title="JAK Company AI Agent API", version="10.0")
 
 # Configuration CORS pour permettre les tests locaux
 app.add_middleware(
@@ -113,16 +113,16 @@ async def health_check():
     """Endpoint de santé pour vérifier que l'API fonctionne"""
     return {
         "status": "healthy",
-        "version": "7.0",
+        "version": "10.0",
         "openai_configured": bool(os.environ.get("OPENAI_API_KEY")),
         "active_sessions": len(memory_store),
         "memory_type": "ConversationBufferMemory (Optimized)",
         "memory_optimization": "Auto-trim to 15 messages",
         "improvements": [
-            "MAJOR FIX: Respect n8n bloc detection",
-            "Fixed priority rules logic to prioritize n8n matches",
-            "Improved conversation context management",
-            "Better CPF delay handling",
+            "CRITICAL FIX: Contexte paiement CPF corrigé",
+            "Fixed context detection for payment responses",
+            "Improved conversation flow for CPF/OPCO responses", 
+            "Better memory management",
             "Enhanced payment context processing",
             "Corrected bloc override issue"
         ]
@@ -187,10 +187,26 @@ class ConversationContextManager:
         awaiting_cpf_info = False
         awaiting_financing_info = False
         
+        # NOUVELLE LOGIQUE : Détection du contexte paiement formation
+        payment_context_detected = False
+        financing_question_asked = False
+        timing_question_asked = False
+        
         if message_count > 0:
             # Chercher dans les derniers messages
             for msg in reversed(history[-6:]):  # Regarder les 6 derniers messages
                 content = str(msg.content).lower()
+                
+                # CORRECTION CRITIQUE : Détecter si on est dans le flux paiement formation
+                if "comment la formation a été financée" in content or "comment la formation a-t-elle été financée" in content:
+                    payment_context_detected = True
+                    financing_question_asked = True
+                    last_bot_message = str(msg.content)
+                
+                if "environ quand la formation s'est terminée" in content or "environ quand la formation s'est-elle terminée" in content:
+                    payment_context_detected = True
+                    timing_question_asked = True
+                    last_bot_message = str(msg.content)
                 
                 # Détecter si on attend des infos spécifiques
                 if "comment la formation a été financée" in content:
@@ -225,7 +241,11 @@ class ConversationContextManager:
             "conversation_flow": "continuing" if message_count > 0 else "starting",
             "awaiting_cpf_info": awaiting_cpf_info,
             "awaiting_financing_info": awaiting_financing_info,
-            "last_bot_message": last_bot_message
+            "last_bot_message": last_bot_message,
+            # NOUVELLES CLÉS CRITIQUES
+            "payment_context_detected": payment_context_detected,
+            "financing_question_asked": financing_question_asked,
+            "timing_question_asked": timing_question_asked
         }
 
 class PaymentContextProcessor:
@@ -283,7 +303,7 @@ class PaymentContextProcessor:
                         "response": """On comprend parfaitement ta frustration. Ce dossier fait partie des quelques cas (moins de 50 sur plus de 2500) bloqués depuis la réforme CPF de février 2025. Même nous n'avons pas été payés. Le blocage est purement administratif, et les délais sont impossibles à prévoir. On te tiendra informé dès qu'on a du nouveau. Inutile de relancer entre-temps 🙏
 
 Tous les éléments nécessaires ont bien été transmis à l'organisme de contrôle 📋🔍
-Mais le problème, c'est que la Caisse des Dépôts demande des documents que le centre de formation envoie sous une semaine…
+Mais le problème, c'est que la Caisse des Dépôts demande des documents que le centre de formation envoie sous une semaine...
 Et ensuite, ils prennent parfois jusqu'à 2 mois pour demander un nouveau document, sans donner de réponse entre-temps.
 
 ✅ On accompagne au maximum le centre de formation pour que tout rentre dans l'ordre.
@@ -334,8 +354,8 @@ class MessageProcessor:
         
         # Liste des mots agressifs avec leurs contextes d'exclusion
         aggressive_patterns = [
-            ("merde", []),  # Pas d'exclusion
-            ("nul", ["nul part", "nulle part"]),  # Exclure "nul part"
+            ("merde", []), # Pas d'exclusion
+            ("nul", ["nul part", "nulle part"]), # Exclure "nul part"
             ("énervez", []),
             ("batards", []),
             ("putain", []),
@@ -367,13 +387,63 @@ class MessageProcessor:
     
     @staticmethod
     def detect_priority_rules(user_message: str, matched_bloc_response: str, conversation_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Applique les règles de priorité avec prise en compte du contexte - VERSION V7 CORRIGÉE"""
+        """Applique les règles de priorité avec prise en compte du contexte - VERSION V10 CORRIGÉE"""
         
         message_lower = user_message.lower()
         
-        logger.info(f"🔍 PRIORITY DETECTION V7: user_message='{user_message}', has_bloc_response={bool(matched_bloc_response)}")
+        logger.info(f"🔧 PRIORITY DETECTION V10: user_message='{user_message}', has_bloc_response={bool(matched_bloc_response)}")
         
-        # ✅ ÉTAPE 0: PRIORITÉ ABSOLUE - Si n8n a matché un bloc, L'UTILISER !!!
+        # ✅ ÉTAPE 0: PRIORITÉ ABSOLUE - NOUVEAU : Contexte paiement formation
+        # CORRECTION CRITIQUE : Vérifier d'abord si on est dans le contexte paiement
+        if conversation_context.get("payment_context_detected"):
+            logger.info("🎯 CONTEXTE PAIEMENT DÉTECTÉ - Analyse des réponses contextuelles")
+            
+            # Extraire le type de financement et délai
+            financing_type = PaymentContextProcessor.extract_financing_type(user_message)
+            delay_months = PaymentContextProcessor.extract_time_delay(user_message)
+            
+            # CAS 1: Réponse "CPF" seule dans le contexte paiement
+            if financing_type == "CPF" and not delay_months:
+                # Si la question de financement a été posée mais pas celle du timing
+                if conversation_context.get("financing_question_asked") and not conversation_context.get("timing_question_asked"):
+                    return {
+                        "use_matched_bloc": False,
+                        "priority_detected": "PAIEMENT_CPF_DEMANDE_TIMING",
+                        "response": "Et environ quand la formation s'est-elle terminée ? 📅",
+                        "context": conversation_context,
+                        "awaiting_financing_info": True
+                    }
+            
+            # CAS 2: Réponse avec financement + délai
+            if financing_type and delay_months:
+                if financing_type == "CPF":
+                    cpf_result = PaymentContextProcessor.handle_cpf_delay_context(
+                        delay_months, user_message, conversation_context
+                    )
+                    if cpf_result:
+                        return cpf_result
+                
+                elif financing_type == "OPCO" and delay_months >= 2:
+                    return {
+                        "use_matched_bloc": False,
+                        "priority_detected": "OPCO_DELAI_DEPASSE",
+                        "response": """Merci pour ta réponse 🙏
+
+Pour un financement via un OPCO, le délai moyen est de 2 mois. Certains dossiers peuvent aller jusqu'à 6 mois ⏳
+
+Mais vu que cela fait plus de 2 mois, on préfère ne pas te faire attendre plus longtemps sans retour.
+
+👉 Je vais transmettre ta demande à notre équipe pour qu'on vérifie ton dossier dès maintenant 📋
+
+🔄 ESCALADE AGENT ADMIN
+
+🕐 Notre équipe traite les demandes du lundi au vendredi, de 9h à 17h (hors pause déjeuner).
+On te tiendra informé dès qu'on a une réponse ✅""",
+                        "context": conversation_context,
+                        "escalade_type": "admin"
+                    }
+        
+        # ✅ ÉTAPE 1: Si n8n a matché un bloc ET qu'on n'est pas dans un contexte spécial, l'utiliser
         if matched_bloc_response and matched_bloc_response.strip():
             # Vérifier si c'est un vrai bloc (pas un fallback générique)
             fallback_indicators = [
@@ -384,7 +454,8 @@ class MessageProcessor:
             
             is_fallback = any(indicator in matched_bloc_response.lower() for indicator in fallback_indicators)
             
-            if not is_fallback:
+            # Si ce n'est pas un fallback ET qu'on n'est pas dans un contexte paiement spécial
+            if not is_fallback and not conversation_context.get("payment_context_detected"):
                 logger.info("✅ UTILISATION BLOC N8N - Bloc valide détecté par n8n")
                 return {
                     "use_matched_bloc": True,
@@ -392,10 +463,8 @@ class MessageProcessor:
                     "response": matched_bloc_response,
                     "context": conversation_context
                 }
-            else:
-                logger.info("⚠️ BLOC N8N IGNORÉ - Semble être un fallback générique")
         
-        # ÉTAPE 1: Traitement des réponses aux questions spécifiques en cours
+        # ✅ ÉTAPE 2: Traitement des réponses aux questions spécifiques en cours
         if conversation_context.get("awaiting_financing_info"):
             financing_type = PaymentContextProcessor.extract_financing_type(user_message)
             delay_months = PaymentContextProcessor.extract_time_delay(user_message)
@@ -417,7 +486,7 @@ Pour un financement via un OPCO, le délai moyen est de 2 mois. Certains dossier
 
 Mais vu que cela fait plus de 2 mois, on préfère ne pas te faire attendre plus longtemps sans retour.
 
-👉 Je vais transmettre ta demande à notre équipe pour qu'on vérifie ton dossier dès maintenant 🧾
+👉 Je vais transmettre ta demande à notre équipe pour qu'on vérifie ton dossier dès maintenant 📋
 
 🔄 ESCALADE AGENT ADMIN
 
@@ -436,11 +505,11 @@ On te tiendra informé dès qu'on a une réponse ✅""",
                     "awaiting_financing_info": True
                 }
         
-        # ÉTAPE 2: Traitement du contexte CPF bloqué
+        # ✅ ÉTAPE 3: Traitement du contexte CPF bloqué
         if conversation_context.get("awaiting_cpf_info"):
             return PaymentContextProcessor.handle_cpf_delay_context(0, user_message, conversation_context)
         
-        # ÉTAPE 3: Agressivité (priorité haute pour couper court)
+        # ✅ ÉTAPE 4: Agressivité (priorité haute pour couper court)
         if MessageProcessor.is_aggressive(user_message):
             return {
                 "use_matched_bloc": False,
@@ -449,48 +518,49 @@ On te tiendra informé dès qu'on a une réponse ✅""",
                 "context": conversation_context
             }
         
-        # ÉTAPE 4: Détection problème paiement formation
-        payment_keywords = [
-            "pas été payé", "rien reçu", "virement", "attends",
-            "paiement", "argent", "retard", "promesse", "veux être payé",
-            "payé pour ma formation", "être payé pour"
-        ]
-        
-        if any(keyword in message_lower for keyword in payment_keywords):
-            # Si c'est un message de suivi sur le paiement
-            if conversation_context["message_count"] > 0 and conversation_context["is_follow_up"]:
-                return {
-                    "use_matched_bloc": False,
-                    "priority_detected": "PAIEMENT_SUIVI",
-                    "response": None,  # Laisser l'IA gérer avec contexte
-                    "context": conversation_context,
-                    "use_ai": True
-                }
-            # Si un bloc est matché pour le paiement, l'utiliser
-            elif matched_bloc_response and ("paiement" in matched_bloc_response.lower() or "délai" in matched_bloc_response.lower()):
-                return {
-                    "use_matched_bloc": True,
-                    "priority_detected": "PAIEMENT_FORMATION_BLOC",
-                    "response": matched_bloc_response,
-                    "context": conversation_context
-                }
-            # Sinon, fallback paiement
-            else:
-                return {
-                    "use_matched_bloc": False,
-                    "priority_detected": "PAIEMENT_SANS_BLOC",
-                    "response": """Salut 👋
+        # ✅ ÉTAPE 5: Détection problème paiement formation (si pas déjà dans le contexte)
+        if not conversation_context.get("payment_context_detected"):
+            payment_keywords = [
+                "pas été payé", "rien reçu", "virement", "attends",
+                "paiement", "argent", "retard", "promesse", "veux être payé",
+                "payé pour ma formation", "être payé pour"
+            ]
+            
+            if any(keyword in message_lower for keyword in payment_keywords):
+                # Si c'est un message de suivi sur le paiement
+                if conversation_context["message_count"] > 0 and conversation_context["is_follow_up"]:
+                    return {
+                        "use_matched_bloc": False,
+                        "priority_detected": "PAIEMENT_SUIVI",
+                        "response": None,  # Laisser l'IA gérer avec contexte
+                        "context": conversation_context,
+                        "use_ai": True
+                    }
+                # Si un bloc est matché pour le paiement, l'utiliser
+                elif matched_bloc_response and ("paiement" in matched_bloc_response.lower() or "délai" in matched_bloc_response.lower()):
+                    return {
+                        "use_matched_bloc": True,
+                        "priority_detected": "PAIEMENT_FORMATION_BLOC",
+                        "response": matched_bloc_response,
+                        "context": conversation_context
+                    }
+                # Sinon, fallback paiement
+                else:
+                    return {
+                        "use_matched_bloc": False,
+                        "priority_detected": "PAIEMENT_SANS_BLOC",
+                        "response": """Salut 😊
 
 Je comprends que tu aies des questions sur le paiement 💰
 
 Je vais faire suivre ta demande à notre équipe spécialisée qui te recontactera rapidement ✅
 
 🕐 Horaires : Lundi-Vendredi, 9h-17h""",
-                    "context": conversation_context,
-                    "escalade_type": "admin"
-                }
+                        "context": conversation_context,
+                        "escalade_type": "admin"
+                    }
         
-        # ÉTAPE 5: Messages de suivi généraux
+        # ✅ ÉTAPE 6: Messages de suivi généraux
         if conversation_context["is_follow_up"] and conversation_context["message_count"] > 0:
             return {
                 "use_matched_bloc": False,
@@ -500,18 +570,18 @@ Je vais faire suivre ta demande à notre équipe spécialisée qui te recontacte
                 "use_ai": True
             }
         
-        # ÉTAPE 6: Escalade automatique
+        # ✅ ÉTAPE 7: Escalade automatique
         escalade_type = ResponseValidator.validate_escalade_keywords(user_message)
         if escalade_type:
             return {
                 "use_matched_bloc": False,
                 "priority_detected": "ESCALADE_AUTO",
                 "escalade_type": escalade_type,
-                "response": "🔄 ESCALADE AGENT ADMIN</br>🕐 Notre équipe traite les demandes du lundi au vendredi, de 9h à 17h (hors pause déjeuner).\n👉 On te tiendra informé dès qu'on a du nouveau ✅",
+                "response": "🔄 ESCALADE AGENT ADMIN</br>🕐 Notre équipe traite les demandes du lundi au vendredi, de 9h à 17h (hors pause déjeuner).\n🔄 On te tiendra informé dès qu'on a du nouveau ✅",
                 "context": conversation_context
             }
         
-        # ÉTAPE 7: Si on arrive ici, utiliser le bloc n8n s'il existe (même si générique)
+        # ✅ ÉTAPE 8: Si on arrive ici, utiliser le bloc n8n s'il existe (même si générique)
         if matched_bloc_response and matched_bloc_response.strip():
             logger.info("✅ UTILISATION BLOC N8N - Fallback sur bloc n8n")
             return {
@@ -521,7 +591,7 @@ Je vais faire suivre ta demande à notre équipe spécialisée qui te recontacte
                 "context": conversation_context
             }
         
-        # ÉTAPE 8: Fallback général
+        # ✅ ÉTAPE 9: Fallback général
         return {
             "use_matched_bloc": False,
             "priority_detected": "FALLBACK_GENERAL",
@@ -614,62 +684,67 @@ async def process_message(request: Request):
             final_response = priority_result["response"]
             response_type = "exact_match_enforced"
             escalade_required = False
-            
+        
         elif priority_result.get("priority_detected") == "N8N_BLOC_DETECTED":
             final_response = priority_result["response"]
             response_type = "n8n_bloc_used"
             escalade_required = False
-            
+        
         elif priority_result.get("priority_detected") == "N8N_BLOC_FALLBACK":
             final_response = priority_result["response"]
             response_type = "n8n_bloc_fallback"
             escalade_required = False
-            
+        
+        elif priority_result.get("priority_detected") == "PAIEMENT_CPF_DEMANDE_TIMING":
+            final_response = priority_result["response"]
+            response_type = "cpf_timing_request"
+            escalade_required = False
+        
         elif priority_result.get("priority_detected") == "CPF_BLOQUE_CONFIRME":
             final_response = priority_result["response"]
             response_type = "cpf_blocked_confirmed"
             escalade_required = False
-            
+        
         elif priority_result.get("priority_detected") == "CPF_DELAI_DEPASSE_FILTRAGE":
             final_response = priority_result["response"]
             response_type = "cpf_delay_filtering"
             escalade_required = False
-            
+        
         elif priority_result.get("priority_detected") == "OPCO_DELAI_DEPASSE":
             final_response = priority_result["response"]
             response_type = "opco_delay_exceeded"
             escalade_required = True
-            
+        
         elif priority_result.get("priority_detected") == "DEMANDE_DATE_FORMATION":
             final_response = priority_result["response"]
             response_type = "asking_formation_date"
             escalade_required = False
-            
+        
         elif priority_result.get("priority_detected") == "AGRESSIVITE":
             final_response = priority_result["response"]
             response_type = "agressivite_detected"
             escalade_required = False
-            
+        
         elif priority_result.get("priority_detected") == "FOLLOW_UP_CONVERSATION":
             final_response = None  # Sera géré par l'IA
             response_type = "follow_up_ai_handled"
             escalade_required = False
-            
+        
         elif priority_result.get("priority_detected") == "PAIEMENT_SUIVI":
             final_response = None  # Sera géré par l'IA
             response_type = "paiement_suivi_ai_handled"
             escalade_required = False
-            
+        
         elif priority_result.get("priority_detected") == "ESCALADE_AUTO":
             final_response = priority_result["response"]
             response_type = "auto_escalade"
             escalade_required = True
-            
+        
         elif priority_result.get("priority_detected") == "PAIEMENT_SANS_BLOC":
             final_response = priority_result["response"]
             response_type = "paiement_fallback"
             escalade_required = True
-            
+        
         else:
             # Utiliser l'IA pour une réponse contextuelle ou fallback
             final_response = None
@@ -680,7 +755,7 @@ async def process_message(request: Request):
         if final_response is None:
             # Adapter le fallback selon le contexte
             if conversation_context["needs_greeting"]:
-                final_response = """Salut 👋
+                final_response = """Salut 😊
 
 Je vais faire suivre ta demande à notre équipe pour qu'elle puisse t'aider au mieux 😊
 
@@ -722,18 +797,18 @@ On te tiendra informé dès que possible ✅"""
         logger.info(f"[{wa_id}] Response generated: type={response_type}, escalade={escalade_required}, memory={memory_summary}")
         
         return response_data
-        
+    
     except HTTPException:
         # Re-raise HTTP exceptions
         raise
-        
+    
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}")
         logger.error(f"Error type: {type(e)}")
         
         # Retourner une réponse de fallback au lieu d'une erreur
         return {
-            "matched_bloc_response": "Salut 👋</br>Je rencontre un petit problème technique. Notre équipe va regarder ça et te recontacter rapidement ! 😊</br>🕐 Horaires : Lundi-Vendredi, 9h-17h",
+            "matched_bloc_response": "Salut 😊</br>Je rencontre un petit problème technique. Notre équipe va regarder ça et te recontacter rapidement ! 😊</br>🕐 Horaires : Lundi-Vendredi, 9h-17h",
             "memory": "",
             "escalade_required": True,
             "escalade_type": "technique",
