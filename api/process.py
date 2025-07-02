@@ -318,14 +318,13 @@ Et ensuite, ils prennent parfois jusqu'à 2 mois pour demander un nouveau docume
                     return {
                         "use_matched_bloc": False,
                         "priority_detected": "CPF_VERIFICATION_ESCALADE",
-                        "response": """D'accord ! Je vais transmettre ta demande à notre équipe pour vérification ✅
+                        "response": """Parfait, je vais faire suivre ta demande à notre équipe ! 😊
 
-🔄 ESCALADE AGENT ADMIN
+🕐 Notre équipe est disponible du lundi au vendredi, de 9h à 17h. On te tiendra informé dès que possible ✅
 
-🕐 Notre équipe traite les demandes du lundi au vendredi, de 9h à 17h (hors pause déjeuner).
-On te tiendra informé dès qu'on a une réponse ✅""",
-        "context": conversation_context,
-        "escalade_type": "admin"
+🔄 Escalade: AGENT ADMIN""",
+                        "context": conversation_context,
+                        "escalade_type": "admin"
                     }
             else:
                 # Première fois qu'on détecte un délai CPF dépassé
