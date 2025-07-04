@@ -2,9 +2,8 @@ services:
   - type: web
     name: langchain-api
     env: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: "python api/process.py" 
-    startCommand: uvicorn api.process:handler --host 0.0.0.0 --port $PORT
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn api.process:app --host 0.0.0.0 --port $PORT"
     envVars:
       - key: PYTHON_VERSION
-        value: 3.11
+        value: "3.11"
