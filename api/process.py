@@ -290,25 +290,57 @@ class PaymentContextProcessor:
         return None
     
     @staticmethod
-    def extract_time_delay(message: str) -> Optional[int]:
-        """Extrait le délai en mois du message"""
-        message_lower = message.lower()
-        
-        # Patterns pour extraire les délais
-        patterns = [
-            r'(\d+)\s*mois',
-            r'il y a\s*(\d+)\s*mois',
-            r'ça fait\s*(\d+)\s*mois',
-            r'depuis\s*(\d+)\s*mois',
-            r'(\d+)\s*mois que'
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, message_lower)
-            if match:
-                return int(match.group(1))
-        
-        return None
+def extract_time_delay(message: str) -> Optional[int]:
+    """Extrait le délai en mois du message - VERSION AMÉLIORÉE"""
+    message_lower = message.lower()
+    
+    # Patterns pour extraire les délais en mois
+    month_patterns = [
+        r'(\d+)\s*mois',
+        r'il y a\s*(\d+)\s*mois',
+        r'ça fait\s*(\d+)\s*mois',
+        r'depuis\s*(\d+)\s*mois',
+        r'(\d+)\s*mois que'
+    ]
+    
+    for pattern in month_patterns:
+        match = re.search(pattern, message_lower)
+        if match:
+            return int(match.group(1))
+    
+    # Patterns pour extraire les délais en semaines (convertir en mois)
+    week_patterns = [
+        r'(\d+)\s*semaines?',
+        r'il y a\s*(\d+)\s*semaines?',
+        r'ça fait\s*(\d+)\s*semaines?',
+        r'depuis\s*(\d+)\s*semaines?'
+    ]
+    
+    for pattern in week_patterns:
+        match = re.search(pattern, message_lower)
+        if match:
+            weeks = int(match.group(1))
+            # Convertir en mois (4 semaines = 1 mois environ)
+            months = round(weeks / 4.0, 1)
+            return int(months) if months >= 1 else 0
+    
+    # Patterns pour extraire les délais en jours (convertir en mois)
+    day_patterns = [
+        r'(\d+)\s*jours?',
+        r'il y a\s*(\d+)\s*jours?',
+        r'ça fait\s*(\d+)\s*jours?',
+        r'depuis\s*(\d+)\s*jours?'
+    ]
+    
+    for pattern in day_patterns:
+        match = re.search(pattern, message_lower)
+        if match:
+            days = int(match.group(1))
+            # Convertir en mois (30 jours = 1 mois environ)
+            months = round(days / 30.0, 1)
+            return int(months) if months >= 1 else 0
+    
+    return None
     
     @staticmethod
     def handle_cpf_delay_context(delay_months: int, user_message: str, conversation_context: Dict[str, Any]) -> Dict[str, Any]:
