@@ -417,6 +417,24 @@ class MessageProcessor:
         
         logger.info(f"🔧 PRIORITY DETECTION V11: user_message='{user_message}', has_bloc_response={bool(matched_bloc_response)}")
         
+        # 🚨 DÉTECTION PRIORITAIRE: CPF + délai dépassé
+        if "cpf" in message_lower and any(word in message_lower for word in ["mois", "il y a", "ça fait"]):
+            delay_months = PaymentContextProcessor.extract_time_delay(user_message)
+        if delay_months and delay_months >= 2:
+            logger.info(f"🎯 CPF DÉLAI DÉPASSÉ DÉTECTÉ: {delay_months} mois - FILTRAGE")
+        return {
+            "use_matched_bloc": False,
+            "priority_detected": "CPF_DELAI_DEPASSE_FILTRAGE",
+            "response": """Juste avant que je transmette ta demande 🙏
+
+Est-ce que tu as déjà été informé par l'équipe que ton dossier CPF faisait partie des quelques cas bloqués par la Caisse des Dépôts ?
+
+👉 Si oui, je te donne directement toutes les infos liées à ce blocage.
+Sinon, je fais remonter ta demande à notre équipe pour vérification ✅""",
+            "context": conversation_context,
+            "awaiting_cpf_info": True
+        }
+    
         # ✅ ÉTAPE 0: NOUVELLE - Détection des demandes d'étapes ambassadeur
         if conversation_context.get("awaiting_steps_info") or conversation_context.get("affiliation_context_detected"):
             how_it_works_patterns = [
