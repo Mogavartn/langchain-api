@@ -11,7 +11,7 @@ import re
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="JAK Company AI Agent API", version="10.0")
+app = FastAPI(title="JAK Company AI Agent API", version="11.0")
 
 # Configuration CORS pour permettre les tests locaux
 app.add_middleware(
@@ -113,18 +113,20 @@ async def health_check():
     """Endpoint de santé pour vérifier que l'API fonctionne"""
     return {
         "status": "healthy",
-        "version": "10.0",
+        "version": "11.0",
         "openai_configured": bool(os.environ.get("OPENAI_API_KEY")),
         "active_sessions": len(memory_store),
         "memory_type": "ConversationBufferMemory (Optimized)",
         "memory_optimization": "Auto-trim to 15 messages",
         "improvements": [
             "CRITICAL FIX: Contexte paiement CPF corrigé",
+            "NOUVEAU: Détection contexte affiliation ambassadeur",
             "Fixed context detection for payment responses",
             "Improved conversation flow for CPF/OPCO responses", 
             "Better memory management",
             "Enhanced payment context processing",
-            "Corrected bloc override issue"
+            "Corrected bloc override issue",
+            "Added affiliation steps detection"
         ]
     }
 
@@ -192,12 +194,15 @@ class ConversationContextManager:
         financing_question_asked = False
         timing_question_asked = False
         
+        # NOUVELLE LOGIQUE : Détection du contexte affiliation
+        affiliation_context_detected = False
+        awaiting_steps_info = False
+        
         if message_count > 0:
             # Chercher dans les derniers messages
             for msg in reversed(history[-6:]):  # Regarder les 6 derniers messages
                 content = str(msg.content).lower()
                 
-                # CORRECTION CRITIQUE : Détecter si on est dans le flux paiement formation
                 # DÉTECTION AMÉLIORÉE : Chercher les patterns du bloc paiement formation
                 payment_patterns = [
                     "comment la formation a été financée",
@@ -207,10 +212,10 @@ class ConversationContextManager:
                     "pour t'aider au mieux, peux-tu me dire comment"
                 ]
 
-                if any(pattern in content.lower() for pattern in payment_patterns):
+                if any(pattern in content for pattern in payment_patterns):
                     payment_context_detected = True
                     financing_question_asked = True
-                last_bot_message = str(msg.content)
+                    last_bot_message = str(msg.content)
                 
                 if "environ quand la formation s'est terminée" in content or "environ quand la formation s'est-elle terminée" in content:
                     payment_context_detected = True
@@ -230,7 +235,15 @@ class ConversationContextManager:
                 if "dossier cpf faisait partie des quelques cas bloqués" in content:
                     awaiting_cpf_info = True
                     last_bot_message = str(msg.content)
+
+                # NOUVELLE DÉTECTION : Contexte affiliation
+                if "ancien apprenant" in content or "programme d'affiliation privilégié" in content:
+                    affiliation_context_detected = True
                 
+                if "tu as déjà des contacts en tête ou tu veux d'abord voir comment ça marche" in content:
+                    awaiting_steps_info = True
+                    last_bot_message = str(msg.content)
+
                 # Détecter les sujets principaux
                 if "ambassadeur" in content or "commission" in content:
                     previous_topic = "ambassadeur"
@@ -252,6 +265,8 @@ class ConversationContextManager:
             "awaiting_financing_info": awaiting_financing_info,
             "last_bot_message": last_bot_message,
             # NOUVELLES CLÉS CRITIQUES
+            "affiliation_context_detected": affiliation_context_detected,
+            "awaiting_steps_info": awaiting_steps_info,
             "payment_context_detected": payment_context_detected,
             "financing_question_asked": financing_question_asked,
             "timing_question_asked": timing_question_asked
@@ -396,24 +411,61 @@ class MessageProcessor:
     
     @staticmethod
     def detect_priority_rules(user_message: str, matched_bloc_response: str, conversation_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Applique les règles de priorité avec prise en compte du contexte - VERSION V10 CORRIGÉE"""
+        """Applique les règles de priorité avec prise en compte du contexte - VERSION V11 CORRIGÉE"""
         
         message_lower = user_message.lower()
         
-        logger.info(f"🔧 PRIORITY DETECTION V10: user_message='{user_message}', has_bloc_response={bool(matched_bloc_response)}")
+        logger.info(f"🔧 PRIORITY DETECTION V11: user_message='{user_message}', has_bloc_response={bool(matched_bloc_response)}")
+        
+        # ✅ ÉTAPE 0: NOUVELLE - Détection des demandes d'étapes ambassadeur
+        if conversation_context.get("awaiting_steps_info") or conversation_context.get("affiliation_context_detected"):
+            how_it_works_patterns = [
+                "comment ça marche", "comment ca marche", "comment faire", "les étapes",
+                "comment démarrer", "comment commencer", "comment s'y prendre",
+                "voir comment ça marche", "voir comment ca marche", "étapes à suivre"
+            ]
+            
+            if any(pattern in message_lower for pattern in how_it_works_patterns):
+                return {
+                    "use_matched_bloc": False,
+                    "priority_detected": "AFFILIATION_STEPS_REQUEST",
+                    "response": """Parfait ! 😊
+
+Tu veux devenir ambassadeur et commencer à gagner de l'argent avec nous ? C'est super simple 👇
+
+✅ Étape 1 : Tu t'abonnes à nos réseaux
+📱 Insta : https://hi.switchy.io/InstagramWeiWei
+📱 Snap : https://hi.switchy.io/SnapChatWeiWei
+
+✅ Étape 2 : Tu créé ton code d'affiliation via le lien suivant (tout en bas) :
+🔗 https://swiy.co/jakpro
+⬆️ Retrouve plein de vidéos 📹 et de conseils sur ce lien 💡
+
+✅ Étape 3 : Tu nous envoies une liste de contacts intéressés (nom, prénom, téléphone ou email).
+➕ Si c'est une entreprise ou un pro, le SIRET est un petit bonus 😊
+🔗 Formulaire ici : https://mrqz.to/AffiliationPromotion
+
+✅ Étape 4 : Si un dossier est validé, tu touches une commission jusqu'à 60 % 💰
+Et tu peux même être payé sur ton compte perso (jusqu'à 3000 €/an et 3 virements)
+
+Tu veux qu'on t'aide à démarrer ou tu envoies ta première liste ? 📝""",
+                    "context": conversation_context,
+                    "escalade_type": None
+                }
         
         # DÉTECTION RAPIDE : Si c'est une réponse à une question de financement
         if conversation_context.get("financing_question_asked") or conversation_context.get("payment_context_detected"):
             logger.info("🔄 CONTEXTE PAIEMENT DÉTECTÉ - Traitement prioritaire")
-    
-        # Pattern simple : "CPF" + délai
-        if "cpf" in message_lower and any(word in message_lower for word in ["mois", "il y a", "ça fait"]):
-            delay_months = PaymentContextProcessor.extract_time_delay(user_message)
-            if delay_months and delay_months >= 2:
-                return PaymentContextProcessor.handle_cpf_delay_context(
-                    delay_months, user_message, conversation_context
-            )
-        # ✅ ÉTAPE 0: PRIORITÉ ABSOLUE - NOUVEAU : Contexte paiement formation
+            
+            # Pattern simple : "CPF" + délai
+            if "cpf" in message_lower and any(word in message_lower for word in ["mois", "il y a", "ça fait"]):
+                delay_months = PaymentContextProcessor.extract_time_delay(user_message)
+                if delay_months and delay_months >= 2:
+                    return PaymentContextProcessor.handle_cpf_delay_context(
+                        delay_months, user_message, conversation_context
+                    )
+        
+        # ✅ ÉTAPE 1: PRIORITÉ ABSOLUE - Contexte paiement formation
         # CORRECTION CRITIQUE : Vérifier d'abord si on est dans le contexte paiement
         if conversation_context.get("payment_context_detected"):
             logger.info("🎯 CONTEXTE PAIEMENT DÉTECTÉ - Analyse des réponses contextuelles")
@@ -463,7 +515,7 @@ On te tiendra informé dès qu'on a une réponse ✅""",
                         "escalade_type": "admin"
                     }
         
-        # ✅ ÉTAPE 1: Si n8n a matché un bloc ET qu'on n'est pas dans un contexte spécial, l'utiliser
+        # ✅ ÉTAPE 2: Si n8n a matché un bloc ET qu'on n'est pas dans un contexte spécial, l'utiliser
         if matched_bloc_response and matched_bloc_response.strip():
             # Vérifier si c'est un vrai bloc (pas un fallback générique)
             fallback_indicators = [
@@ -474,8 +526,8 @@ On te tiendra informé dès qu'on a une réponse ✅""",
             
             is_fallback = any(indicator in matched_bloc_response.lower() for indicator in fallback_indicators)
             
-            # Si ce n'est pas un fallback ET qu'on n'est pas dans un contexte paiement spécial
-            if not is_fallback and not conversation_context.get("payment_context_detected"):
+            # Si ce n'est pas un fallback ET qu'on n'est pas dans un contexte paiement/affiliation spécial
+            if not is_fallback and not conversation_context.get("payment_context_detected") and not conversation_context.get("awaiting_steps_info"):
                 logger.info("✅ UTILISATION BLOC N8N - Bloc valide détecté par n8n")
                 return {
                     "use_matched_bloc": True,
@@ -484,7 +536,7 @@ On te tiendra informé dès qu'on a une réponse ✅""",
                     "context": conversation_context
                 }
         
-        # ✅ ÉTAPE 2: Traitement des réponses aux questions spécifiques en cours
+        # ✅ ÉTAPE 3: Traitement des réponses aux questions spécifiques en cours
         if conversation_context.get("awaiting_financing_info"):
             financing_type = PaymentContextProcessor.extract_financing_type(user_message)
             delay_months = PaymentContextProcessor.extract_time_delay(user_message)
@@ -525,11 +577,11 @@ On te tiendra informé dès qu'on a une réponse ✅""",
                     "awaiting_financing_info": True
                 }
         
-        # ✅ ÉTAPE 3: Traitement du contexte CPF bloqué
+        # ✅ ÉTAPE 4: Traitement du contexte CPF bloqué
         if conversation_context.get("awaiting_cpf_info"):
             return PaymentContextProcessor.handle_cpf_delay_context(0, user_message, conversation_context)
         
-        # ✅ ÉTAPE 4: Agressivité (priorité haute pour couper court)
+        # ✅ ÉTAPE 5: Agressivité (priorité haute pour couper court)
         if MessageProcessor.is_aggressive(user_message):
             return {
                 "use_matched_bloc": False,
@@ -538,7 +590,7 @@ On te tiendra informé dès qu'on a une réponse ✅""",
                 "context": conversation_context
             }
         
-        # ✅ ÉTAPE 5: Détection problème paiement formation (si pas déjà dans le contexte)
+        # ✅ ÉTAPE 6: Détection problème paiement formation (si pas déjà dans le contexte)
         if not conversation_context.get("payment_context_detected"):
             payment_keywords = [
                 "pas été payé", "rien reçu", "virement", "attends",
@@ -580,7 +632,7 @@ Je vais faire suivre ta demande à notre équipe spécialisée qui te recontacte
                         "escalade_type": "admin"
                     }
         
-        # ✅ ÉTAPE 6: Messages de suivi généraux
+        # ✅ ÉTAPE 7: Messages de suivi généraux
         if conversation_context["is_follow_up"] and conversation_context["message_count"] > 0:
             return {
                 "use_matched_bloc": False,
@@ -590,7 +642,7 @@ Je vais faire suivre ta demande à notre équipe spécialisée qui te recontacte
                 "use_ai": True
             }
         
-        # ✅ ÉTAPE 7: Escalade automatique
+        # ✅ ÉTAPE 8: Escalade automatique
         escalade_type = ResponseValidator.validate_escalade_keywords(user_message)
         if escalade_type:
             return {
@@ -601,7 +653,7 @@ Je vais faire suivre ta demande à notre équipe spécialisée qui te recontacte
                 "context": conversation_context
             }
         
-        # ✅ ÉTAPE 8: Si on arrive ici, utiliser le bloc n8n s'il existe (même si générique)
+        # ✅ ÉTAPE 9: Si on arrive ici, utiliser le bloc n8n s'il existe (même si générique)
         if matched_bloc_response and matched_bloc_response.strip():
             logger.info("✅ UTILISATION BLOC N8N - Fallback sur bloc n8n")
             return {
@@ -611,7 +663,7 @@ Je vais faire suivre ta demande à notre équipe spécialisée qui te recontacte
                 "context": conversation_context
             }
         
-        # ✅ ÉTAPE 9: Fallback général
+        # ✅ ÉTAPE 10: Fallback général
         return {
             "use_matched_bloc": False,
             "priority_detected": "FALLBACK_GENERAL",
@@ -713,6 +765,11 @@ async def process_message(request: Request):
         elif priority_result.get("priority_detected") == "N8N_BLOC_FALLBACK":
             final_response = priority_result["response"]
             response_type = "n8n_bloc_fallback"
+            escalade_required = False
+        
+        elif priority_result.get("priority_detected") == "AFFILIATION_STEPS_REQUEST":
+            final_response = priority_result["response"]
+            response_type = "affiliation_steps_provided"
             escalade_required = False
         
         elif priority_result.get("priority_detected") == "PAIEMENT_CPF_DEMANDE_TIMING":
