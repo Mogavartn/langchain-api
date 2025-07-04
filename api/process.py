@@ -198,10 +198,19 @@ class ConversationContextManager:
                 content = str(msg.content).lower()
                 
                 # CORRECTION CRITIQUE : Détecter si on est dans le flux paiement formation
-                if "comment la formation a été financée" in content or "comment la formation a-t-elle été financée" in content:
+                # DÉTECTION AMÉLIORÉE : Chercher les patterns du bloc paiement formation
+                payment_patterns = [
+                    "comment la formation a été financée",
+                    "comment la formation a-t-elle été financée", 
+                    "cpf, opco, ou paiement direct",
+                    "et environ quand la formation s'est-elle terminée",
+                    "pour t'aider au mieux, peux-tu me dire comment"
+                ]
+
+                if any(pattern in content.lower() for pattern in payment_patterns):
                     payment_context_detected = True
                     financing_question_asked = True
-                    last_bot_message = str(msg.content)
+                last_bot_message = str(msg.content)
                 
                 if "environ quand la formation s'est terminée" in content or "environ quand la formation s'est-elle terminée" in content:
                     payment_context_detected = True
@@ -393,6 +402,17 @@ class MessageProcessor:
         
         logger.info(f"🔧 PRIORITY DETECTION V10: user_message='{user_message}', has_bloc_response={bool(matched_bloc_response)}")
         
+        # DÉTECTION RAPIDE : Si c'est une réponse à une question de financement
+        if conversation_context.get("financing_question_asked") or conversation_context.get("payment_context_detected"):
+            logger.info("🔄 CONTEXTE PAIEMENT DÉTECTÉ - Traitement prioritaire")
+    
+        # Pattern simple : "CPF" + délai
+        if "cpf" in message_lower and any(word in message_lower for word in ["mois", "il y a", "ça fait"]):
+            delay_months = PaymentContextProcessor.extract_time_delay(user_message)
+            if delay_months and delay_months >= 2:
+                return PaymentContextProcessor.handle_cpf_delay_context(
+                    delay_months, user_message, conversation_context
+            )
         # ✅ ÉTAPE 0: PRIORITÉ ABSOLUE - NOUVEAU : Contexte paiement formation
         # CORRECTION CRITIQUE : Vérifier d'abord si on est dans le contexte paiement
         if conversation_context.get("payment_context_detected"):
