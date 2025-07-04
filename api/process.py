@@ -11,7 +11,7 @@ import re
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="JAK Company AI Agent API", version="11.0")
+app = FastAPI(title="JAK Company AI Agent API", version="12.0")
 
 # Configuration CORS pour permettre les tests locaux
 app.add_middleware(
@@ -113,7 +113,7 @@ async def health_check():
     """Endpoint de santé pour vérifier que l'API fonctionne"""
     return {
         "status": "healthy",
-        "version": "11.0",
+        "version": "12.0",
         "openai_configured": bool(os.environ.get("OPENAI_API_KEY")),
         "active_sessions": len(memory_store),
         "memory_type": "ConversationBufferMemory (Optimized)",
@@ -121,12 +121,15 @@ async def health_check():
         "improvements": [
             "CRITICAL FIX: Contexte paiement CPF corrigé",
             "NOUVEAU: Détection contexte affiliation ambassadeur",
+            "NOUVEAU V12: Gestion délais jours/semaines/mois",
+            "NOUVEAU V12: Bloc délai normal CPF < 45 jours",
             "Fixed context detection for payment responses",
             "Improved conversation flow for CPF/OPCO responses", 
             "Better memory management",
             "Enhanced payment context processing",
             "Corrected bloc override issue",
-            "Added affiliation steps detection"
+            "Added affiliation steps detection",
+            "Enhanced time delay extraction (days, weeks, months)"
         ]
     }
 
@@ -291,9 +294,9 @@ class PaymentContextProcessor:
     
     @staticmethod
     def extract_time_delay(message: str) -> Optional[int]:
-        """Extrait le délai en mois du message - VERSION AMÉLIORÉE"""
+        """Extrait le délai en mois du message - VERSION AMÉLIORÉE V12"""
         message_lower = message.lower()
-    
+        
         # Patterns pour extraire les délais en mois
         month_patterns = [
             r'(\d+)\s*mois',
@@ -302,12 +305,14 @@ class PaymentContextProcessor:
             r'depuis\s*(\d+)\s*mois',
             r'(\d+)\s*mois que'
         ]
-
+        
         for pattern in month_patterns:
             match = re.search(pattern, message_lower)
             if match:
-                return int(match.group(1))
-    
+                months = int(match.group(1))
+                logger.info(f"📅 Délai détecté: {months} mois")
+                return months
+        
         # Patterns pour extraire les délais en semaines (convertir en mois)
         week_patterns = [
             r'(\d+)\s*semaines?',
@@ -315,15 +320,16 @@ class PaymentContextProcessor:
             r'ça fait\s*(\d+)\s*semaines?',
             r'depuis\s*(\d+)\s*semaines?'
         ]
-    
+        
         for pattern in week_patterns:
             match = re.search(pattern, message_lower)
             if match:
                 weeks = int(match.group(1))
-                # Convertir en mois (4 semaines = 1 mois environ)
-                months = round(weeks / 4.0, 1)
+                # Convertir en mois (4.33 semaines = 1 mois)
+                months = round(weeks / 4.33, 1)
+                logger.info(f"📅 Délai détecté: {weeks} semaines = {months} mois")
                 return int(months) if months >= 1 else 0
-    
+        
         # Patterns pour extraire les délais en jours (convertir en mois)
         day_patterns = [
             r'(\d+)\s*jours?',
@@ -331,15 +337,16 @@ class PaymentContextProcessor:
             r'ça fait\s*(\d+)\s*jours?',
             r'depuis\s*(\d+)\s*jours?'
         ]
-    
+        
         for pattern in day_patterns:
             match = re.search(pattern, message_lower)
             if match:
                 days = int(match.group(1))
-                # Convertir en mois (30 jours = 1 mois environ)
+                # Convertir en mois (30 jours = 1 mois)
                 months = round(days / 30.0, 1)
+                logger.info(f"📅 Délai détecté: {days} jours = {months} mois")
                 return int(months) if months >= 1 else 0
-    
+        
         return None
     
     @staticmethod
@@ -378,7 +385,7 @@ Et ensuite, ils prennent parfois jusqu'à 2 mois pour demander un nouveau docume
 
 🕐 Notre équipe est disponible du lundi au vendredi, de 9h à 17h. On te tiendra informé dès que possible ✅
 
-🔄 Escalade: AGENT ADMIN""",
+🔄 ESCALADE AGENT ADMIN""",
                         "context": conversation_context,
                         "escalade_type": "admin"
                     }
@@ -443,31 +450,46 @@ class MessageProcessor:
     
     @staticmethod
     def detect_priority_rules(user_message: str, matched_bloc_response: str, conversation_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Applique les règles de priorité avec prise en compte du contexte - VERSION V11 CORRIGÉE"""
+        """Applique les règles de priorité avec prise en compte du contexte - VERSION V12 AMÉLIORÉE"""
         
         message_lower = user_message.lower()
         
-        logger.info(f"🔧 PRIORITY DETECTION V11: user_message='{user_message}', has_bloc_response={bool(matched_bloc_response)}")
+        logger.info(f"🔧 PRIORITY DETECTION V12: user_message='{user_message}', has_bloc_response={bool(matched_bloc_response)}")
         
-        # 🚨 DÉTECTION PRIORITAIRE: CPF + délai dépassé
-        if "cpf" in message_lower and any(word in message_lower for word in ["mois", "il y a", "ça fait"]):
+        # 🚨 ÉTAPE 0.1: DÉTECTION PRIORITAIRE CPF + DÉLAI (TOUTES UNITÉS)
+        if "cpf" in message_lower and any(word in message_lower for word in ["mois", "semaines", "jours", "il y a", "ça fait"]):
             delay_months = PaymentContextProcessor.extract_time_delay(user_message)
-        if delay_months and delay_months >= 2:
-            logger.info(f"🎯 CPF DÉLAI DÉPASSÉ DÉTECTÉ: {delay_months} mois - FILTRAGE")
-        return {
-            "use_matched_bloc": False,
-            "priority_detected": "CPF_DELAI_DEPASSE_FILTRAGE",
-            "response": """Juste avant que je transmette ta demande 🙏
+            logger.info(f"🎯 CPF + DÉLAI DÉTECTÉ: {delay_months} mois équivalent")
+            
+            if delay_months is not None and delay_months >= 2:  # >= 2 mois = délai dépassé
+                return {
+                    "use_matched_bloc": False,
+                    "priority_detected": "CPF_DELAI_DEPASSE_FILTRAGE",
+                    "response": """Juste avant que je transmette ta demande 🙏
 
 Est-ce que tu as déjà été informé par l'équipe que ton dossier CPF faisait partie des quelques cas bloqués par la Caisse des Dépôts ?
 
 👉 Si oui, je te donne directement toutes les infos liées à ce blocage.
 Sinon, je fais remonter ta demande à notre équipe pour vérification ✅""",
-            "context": conversation_context,
-            "awaiting_cpf_info": True
-        }
-    
-        # ✅ ÉTAPE 0: NOUVELLE - Détection des demandes d'étapes ambassadeur
+                    "context": conversation_context,
+                    "awaiting_cpf_info": True
+                }
+            elif delay_months is not None and delay_months < 2:  # < 2 mois = délai normal
+                return {
+                    "use_matched_bloc": False,
+                    "priority_detected": "CPF_DELAI_NORMAL",
+                    "response": """Pour un financement CPF, le délai minimum est de 45 jours après réception des feuilles d'émargement signées 📋
+
+Ton dossier est encore dans les délais normaux ⏰
+
+Si tu as des questions spécifiques sur ton dossier, je peux faire suivre à notre équipe pour vérification ✅
+
+Tu veux que je transmette ta demande ? 😊""",
+                    "context": conversation_context,
+                    "escalade_type": "admin"
+                }
+        
+        # ✅ ÉTAPE 0.2: NOUVELLE - Détection des demandes d'étapes ambassadeur
         if conversation_context.get("awaiting_steps_info") or conversation_context.get("affiliation_context_detected"):
             how_it_works_patterns = [
                 "comment ça marche", "comment ca marche", "comment faire", "les étapes",
@@ -502,18 +524,6 @@ Tu veux qu'on t'aide à démarrer ou tu envoies ta première liste ? 📝""",
                     "context": conversation_context,
                     "escalade_type": None
                 }
-        
-        # DÉTECTION RAPIDE : Si c'est une réponse à une question de financement
-        if conversation_context.get("financing_question_asked") or conversation_context.get("payment_context_detected"):
-            logger.info("🔄 CONTEXTE PAIEMENT DÉTECTÉ - Traitement prioritaire")
-            
-            # Pattern simple : "CPF" + délai
-            if "cpf" in message_lower and any(word in message_lower for word in ["mois", "il y a", "ça fait"]):
-                delay_months = PaymentContextProcessor.extract_time_delay(user_message)
-                if delay_months and delay_months >= 2:
-                    return PaymentContextProcessor.handle_cpf_delay_context(
-                        delay_months, user_message, conversation_context
-                    )
         
         # ✅ ÉTAPE 1: PRIORITÉ ABSOLUE - Contexte paiement formation
         # CORRECTION CRITIQUE : Vérifier d'abord si on est dans le contexte paiement
@@ -817,6 +827,16 @@ async def process_message(request: Request):
             response_type = "n8n_bloc_fallback"
             escalade_required = False
         
+        elif priority_result.get("priority_detected") == "CPF_DELAI_DEPASSE_FILTRAGE":
+            final_response = priority_result["response"]
+            response_type = "cpf_delay_filtering"
+            escalade_required = False
+        
+        elif priority_result.get("priority_detected") == "CPF_DELAI_NORMAL":
+            final_response = priority_result["response"]
+            response_type = "cpf_delay_normal"
+            escalade_required = False
+        
         elif priority_result.get("priority_detected") == "AFFILIATION_STEPS_REQUEST":
             final_response = priority_result["response"]
             response_type = "affiliation_steps_provided"
@@ -830,11 +850,6 @@ async def process_message(request: Request):
         elif priority_result.get("priority_detected") == "CPF_BLOQUE_CONFIRME":
             final_response = priority_result["response"]
             response_type = "cpf_blocked_confirmed"
-            escalade_required = False
-        
-        elif priority_result.get("priority_detected") == "CPF_DELAI_DEPASSE_FILTRAGE":
-            final_response = priority_result["response"]
-            response_type = "cpf_delay_filtering"
             escalade_required = False
         
         elif priority_result.get("priority_detected") == "OPCO_DELAI_DEPASSE":
