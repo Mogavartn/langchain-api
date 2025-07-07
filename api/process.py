@@ -457,54 +457,54 @@ class MessageProcessor:
         logger.info(f"🔧 PRIORITY DETECTION V12: user_message='{user_message}', has_bloc_response={bool(matched_bloc_response)}")
         
         # 🚨 ÉTAPE 0.1: DÉTECTION PRIORITAIRE FINANCEMENT + DÉLAI (TOUS TYPES)
-financing_indicators = ["cpf", "opco", "direct", "financé", "financement", "payé", "entreprise"]
-delay_indicators = ["mois", "semaines", "jours", "il y a", "ça fait", "depuis", "terminé", "fini"]
+        financing_indicators = ["cpf", "opco", "direct", "financé", "financement", "payé", "entreprise"]
+        delay_indicators = ["mois", "semaines", "jours", "il y a", "ça fait", "depuis", "terminé", "fini"]
 
-has_financing = any(word in message_lower for word in financing_indicators)
-has_delay = any(word in message_lower for word in delay_indicators)
+        has_financing = any(word in message_lower for word in financing_indicators)
+        has_delay = any(word in message_lower for word in delay_indicators)
 
-if has_financing and has_delay:
-    financing_type = PaymentContextProcessor.extract_financing_type(user_message)
-    delay_months = PaymentContextProcessor.extract_time_delay(user_message)
-    
-    logger.info(f"🎯 FINANCEMENT + DÉLAI DÉTECTÉ: {financing_type} / {delay_months} mois équivalent")
-    
-    if financing_type and delay_months is not None:
-        # CPF avec délai
-        if financing_type == "CPF" and delay_months >= 2:
-            return {
-                "use_matched_bloc": False,
-                "priority_detected": "CPF_DELAI_DEPASSE_FILTRAGE",
-                "response": """Juste avant que je transmette ta demande 🙏
+        if has_financing and has_delay:
+            financing_type = PaymentContextProcessor.extract_financing_type(user_message)
+            delay_months = PaymentContextProcessor.extract_time_delay(user_message)
+            
+            logger.info(f"🎯 FINANCEMENT + DÉLAI DÉTECTÉ: {financing_type} / {delay_months} mois équivalent")
+            
+            if financing_type and delay_months is not None:
+                # CPF avec délai
+                if financing_type == "CPF" and delay_months >= 2:
+                    return {
+                        "use_matched_bloc": False,
+                        "priority_detected": "CPF_DELAI_DEPASSE_FILTRAGE",
+                        "response": """Juste avant que je transmette ta demande 🙏
 
 Est-ce que tu as déjà été informé par l'équipe que ton dossier CPF faisait partie des quelques cas bloqués par la Caisse des Dépôts ?
 
 👉 Si oui, je te donne directement toutes les infos liées à ce blocage.
 Sinon, je fais remonter ta demande à notre équipe pour vérification ✅""",
-                "context": conversation_context,
-                "awaiting_cpf_info": True
-            }
-        elif financing_type == "CPF" and delay_months < 2:
-            return {
-                "use_matched_bloc": False,
-                "priority_detected": "CPF_DELAI_NORMAL",
-                "response": """Pour un financement CPF, le délai minimum est de 45 jours après réception des feuilles d'émargement signées 📋
+                        "context": conversation_context,
+                        "awaiting_cpf_info": True
+                    }
+                elif financing_type == "CPF" and delay_months < 2:
+                    return {
+                        "use_matched_bloc": False,
+                        "priority_detected": "CPF_DELAI_NORMAL",
+                        "response": """Pour un financement CPF, le délai minimum est de 45 jours après réception des feuilles d'émargement signées 📋
 
 Ton dossier est encore dans les délais normaux ⏰
 
 Si tu as des questions spécifiques sur ton dossier, je peux faire suivre à notre équipe pour vérification ✅
 
 Tu veux que je transmette ta demande ? 😊""",
-                "context": conversation_context,
-                "escalade_type": "admin"
-            }
-        
-        # OPCO avec délai - NOUVEAU
-        elif financing_type == "OPCO" and delay_months >= 2:
-            return {
-                "use_matched_bloc": False,
-                "priority_detected": "OPCO_DELAI_DEPASSE",
-                "response": """Merci pour ta réponse 🙏
+                        "context": conversation_context,
+                        "escalade_type": "admin"
+                    }
+                
+                # OPCO avec délai - NOUVEAU
+                elif financing_type == "OPCO" and delay_months >= 2:
+                    return {
+                        "use_matched_bloc": False,
+                        "priority_detected": "OPCO_DELAI_DEPASSE",
+                        "response": """Merci pour ta réponse 🙏
 
 Pour un financement via un OPCO, le délai moyen est de 2 mois. Certains dossiers peuvent aller jusqu'à 6 mois ⏳
 
@@ -516,14 +516,14 @@ Mais vu que cela fait plus de 2 mois, on préfère ne pas te faire attendre plus
 
 🕐 Notre équipe traite les demandes du lundi au vendredi, de 9h à 17h (hors pause déjeuner).
 On te tiendra informé dès qu'on a une réponse ✅""",
-                "context": conversation_context,
-                "escalade_type": "admin"
-            }
-        elif financing_type == "OPCO" and delay_months < 2:
-            return {
-                "use_matched_bloc": False,
-                "priority_detected": "OPCO_DELAI_NORMAL",
-                "response": """Pour un financement OPCO, le délai moyen est de 2 mois après la fin de formation 📋
+                        "context": conversation_context,
+                        "escalade_type": "admin"
+                    }
+                elif financing_type == "OPCO" and delay_months < 2:
+                    return {
+                        "use_matched_bloc": False,
+                        "priority_detected": "OPCO_DELAI_NORMAL",
+                        "response": """Pour un financement OPCO, le délai moyen est de 2 mois après la fin de formation 📋
 
 Ton dossier est encore dans les délais normaux ⏰
 
@@ -532,20 +532,20 @@ Certains dossiers peuvent prendre jusqu'à 6 mois selon l'organisme.
 Si tu as des questions spécifiques, je peux faire suivre à notre équipe ✅
 
 Tu veux que je transmette ta demande pour vérification ? 😊""",
-                "context": conversation_context,
-                "escalade_type": "admin"
-            }
-        
-        # Financement direct avec délai - NOUVEAU  
-        elif financing_type == "direct":
-            # Convertir en jours pour le calcul (délai normal = 7 jours)
-            delay_days = delay_months * 30  # Approximation
-            
-            if delay_days > 7:  # Plus de 7 jours = anormal pour financement direct
-                return {
-                    "use_matched_bloc": False,
-                    "priority_detected": "DIRECT_DELAI_DEPASSE",
-                    "response": """Merci pour ta réponse 🙏
+                        "context": conversation_context,
+                        "escalade_type": "admin"
+                    }
+                
+                # Financement direct avec délai - NOUVEAU  
+                elif financing_type == "direct":
+                    # Convertir en jours pour le calcul (délai normal = 7 jours)
+                    delay_days = delay_months * 30  # Approximation
+                    
+                    if delay_days > 7:  # Plus de 7 jours = anormal pour financement direct
+                        return {
+                            "use_matched_bloc": False,
+                            "priority_detected": "DIRECT_DELAI_DEPASSE",
+                            "response": """Merci pour ta réponse 🙏
 
 Pour un financement direct, le délai normal est de 7 jours après fin de formation + réception du dossier complet 📋
 
@@ -557,24 +557,24 @@ Vu que cela fait plus que le délai habituel, je vais faire suivre ta demande à
 
 🕐 Notre équipe traite les demandes du lundi au vendredi, de 9h à 17h (hors pause déjeuner).
 On te tiendra informé rapidement ✅""",
-                    "context": conversation_context,
-                    "escalade_type": "admin"
-                }
-            else:  # Délai normal
-                return {
-                    "use_matched_bloc": False,
-                    "priority_detected": "DIRECT_DELAI_NORMAL", 
-                    "response": """Pour un financement direct, le délai normal est de 7 jours après la fin de formation et réception du dossier complet 📋
+                            "context": conversation_context,
+                            "escalade_type": "admin"
+                        }
+                    else:  # Délai normal
+                        return {
+                            "use_matched_bloc": False,
+                            "priority_detected": "DIRECT_DELAI_NORMAL", 
+                            "response": """Pour un financement direct, le délai normal est de 7 jours après la fin de formation et réception du dossier complet 📋
 
 Ton dossier est encore dans les délais normaux ⏰
 
 Si tu as des questions spécifiques sur ton dossier, je peux faire suivre à notre équipe ✅
 
 Tu veux que je transmette ta demande ? 😊""",
-                    "context": conversation_context,
-                    "escalade_type": "admin"
-                }
-        
+                            "context": conversation_context,
+                            "escalade_type": "admin"
+                        }
+
         # ✅ ÉTAPE 0.2: NOUVELLE - Détection des demandes d'étapes ambassadeur
         if conversation_context.get("awaiting_steps_info") or conversation_context.get("affiliation_context_detected"):
             how_it_works_patterns = [
