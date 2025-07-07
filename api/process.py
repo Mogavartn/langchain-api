@@ -11,7 +11,7 @@ import re
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="JAK Company AI Agent API", version="12.0")
+app = FastAPI(title="JAK Company AI Agent API", version="13.0")
 
 # Configuration CORS pour permettre les tests locaux
 app.add_middleware(
@@ -113,23 +113,22 @@ async def health_check():
     """Endpoint de santé pour vérifier que l'API fonctionne"""
     return {
         "status": "healthy",
-        "version": "12.0",
+        "version": "13.0",
         "openai_configured": bool(os.environ.get("OPENAI_API_KEY")),
         "active_sessions": len(memory_store),
         "memory_type": "ConversationBufferMemory (Optimized)",
         "memory_optimization": "Auto-trim to 15 messages",
         "improvements": [
-            "CRITICAL FIX: Contexte paiement CPF corrigé",
-            "NOUVEAU: Détection contexte affiliation ambassadeur",
-            "NOUVEAU V12: Gestion délais jours/semaines/mois",
-            "NOUVEAU V12: Bloc délai normal CPF < 45 jours",
-            "Fixed context detection for payment responses",
-            "Improved conversation flow for CPF/OPCO responses", 
-            "Better memory management",
-            "Enhanced payment context processing",
-            "Corrected bloc override issue",
-            "Added affiliation steps detection",
-            "Enhanced time delay extraction (days, weeks, months)"
+            "VERSION 13: CORRECTION ULTRA RENFORCÉE OPCO/DIRECT",
+            "NOUVEAU: Détection OPCO avec jours/semaines",
+            "NOUVEAU: Détection financement direct ultra-renforcée", 
+            "NOUVEAU: Conversion automatique jours/semaines → mois",
+            "NOUVEAU: Patterns flexibles et contextuels",
+            "NOUVEAU: Logs détaillés pour debugging",
+            "Fixed: OPCO il y a X jours/semaines",
+            "Fixed: en direct il y a X jours/semaines",
+            "Fixed: j'ai payé moi même il y a X",
+            "Enhanced: PaymentContextProcessor ultra-renforcé"
         ]
     }
 
@@ -209,12 +208,12 @@ class ConversationContextManager:
                 # DÉTECTION AMÉLIORÉE : Chercher les patterns du bloc paiement formation
                 payment_patterns = [
                     "comment la formation a été financée",
-                    "comment la formation a-t-elle été financée", 
+                    "comment la formation a-t-elle été financée",
                     "cpf, opco, ou paiement direct",
                     "et environ quand la formation s'est-elle terminée",
                     "pour t'aider au mieux, peux-tu me dire comment"
                 ]
-
+                
                 if any(pattern in content for pattern in payment_patterns):
                     payment_context_detected = True
                     financing_question_asked = True
@@ -238,7 +237,7 @@ class ConversationContextManager:
                 if "dossier cpf faisait partie des quelques cas bloqués" in content:
                     awaiting_cpf_info = True
                     last_bot_message = str(msg.content)
-
+                
                 # NOUVELLE DÉTECTION : Contexte affiliation
                 if "ancien apprenant" in content or "programme d'affiliation privilégié" in content:
                     affiliation_context_detected = True
@@ -246,7 +245,7 @@ class ConversationContextManager:
                 if "tu as déjà des contacts en tête ou tu veux d'abord voir comment ça marche" in content:
                     awaiting_steps_info = True
                     last_bot_message = str(msg.content)
-
+                
                 # Détecter les sujets principaux
                 if "ambassadeur" in content or "commission" in content:
                     previous_topic = "ambassadeur"
@@ -276,77 +275,148 @@ class ConversationContextManager:
         }
 
 class PaymentContextProcessor:
-    """Processeur spécialisé pour le contexte paiement formation"""
+    """Processeur spécialisé pour le contexte paiement formation - VERSION ULTRA CORRIGÉE"""
     
     @staticmethod
     def extract_financing_type(message: str) -> Optional[str]:
-        """Extrait le type de financement du message"""
+        """Extrait le type de financement du message - VERSION ULTRA RENFORCÉE"""
         message_lower = message.lower()
         
-        if any(word in message_lower for word in ['cpf', 'compte personnel']):
-            return 'CPF'
-        elif any(word in message_lower for word in ['opco', 'opérateur']):
+        logger.info(f"🔍 ANALYSE FINANCEMENT: '{message}'")
+        
+        # NOUVELLE MAP ULTRA RENFORCÉE
+        financing_patterns = {
+            # CPF
+            'CPF': [
+                'cpf', 'compte personnel', 'compte personnel formation'
+            ],
+            # OPCO - PATTERNS ULTRA RENFORCÉS  
+            'OPCO': [
+                'opco', 'operateur', 'opérateur', 'opco entreprise',
+                'organisme paritaire', 'formation opco', 'financé par opco',
+                'finance par opco', 'financement opco', 'via opco',
+                'avec opco', 'par opco', 'opco formation', 'formation via opco',
+                'formation avec opco', 'formation par opco', 'grâce opco',
+                'grace opco', 'opco paie', 'opco paye', 'opco a payé',
+                'opco a paye', 'pris en charge opco', 'prise en charge opco',
+                'remboursé opco', 'rembourse opco'
+            ],
+            # FINANCEMENT DIRECT - PATTERNS ULTRA RENFORCÉS
+            'direct': [
+                'en direct', 'financé en direct', 'finance en direct',
+                'financement direct', 'direct', 'entreprise', 'particulier',
+                'patron', "j'ai financé", 'jai finance', 'j ai finance',
+                'financé moi', 'finance moi', 'payé moi', 'paye moi',
+                'moi même', 'moi meme', "j'ai payé", 'jai paye', 'j ai paye',
+                'payé par moi', 'paye par moi', 'financé par moi',
+                'finance par moi', 'sur mes fonds', 'fonds propres',
+                'personnellement', 'directement', 'par mon entreprise',
+                'par la société', 'par ma société', 'financement personnel',
+                'auto-financement', 'auto financement', 'tout seul',
+                'payé tout seul', 'paye tout seul', 'financé seul',
+                'finance seul', 'de ma poche', 'par moi même',
+                'par moi meme', 'avec mes deniers', 'société directement',
+                'entreprise directement', 'payé directement',
+                'paye directement', 'financé directement',
+                'finance directement', 'moi qui ai payé',
+                'moi qui ai paye', "c'est moi qui ai payé",
+                "c'est moi qui ai paye", 'payé de ma poche',
+                'paye de ma poche', 'sortie de ma poche',
+                'mes propres fonds', 'argent personnel', 'personnel'
+            ]
+        }
+        
+        # Recherche par patterns
+        for financing_type, patterns in financing_patterns.items():
+            for pattern in patterns:
+                if pattern in message_lower:
+                    logger.info(f"🎯 Financement détecté: '{pattern}' -> {financing_type}")
+                    return financing_type
+        
+        # DÉTECTION CONTEXTUELLE RENFORCÉE
+        logger.info("🔍 Recherche contextuelle financement...")
+        
+        # OPCO simple
+        if 'opco' in message_lower:
+            logger.info("✅ OPCO détecté par mot-clé simple")
             return 'OPCO'
-        elif any(word in message_lower for word in ['direct', 'entreprise', 'particulier']):
+        
+        # Financement direct contextuel
+        if any(word in message_lower for word in ['financé', 'finance', 'payé', 'paye']) and \
+           any(word in message_lower for word in ['direct', 'moi', 'personnel', 'entreprise', 'seul', 'même', 'meme', 'poche', 'propre']):
+            logger.info("✅ Financement direct détecté par contexte")
             return 'direct'
         
+        # Pattern "j'ai" + action
+        if any(word in message_lower for word in ["j'ai", 'jai', 'j ai']) and \
+           any(word in message_lower for word in ['payé', 'paye', 'financé', 'finance']):
+            logger.info("✅ Financement direct détecté par 'j'ai payé/financé'")
+            return 'direct'
+        
+        logger.warning(f"❌ Aucun financement détecté dans: '{message}'")
         return None
     
     @staticmethod
     def extract_time_delay(message: str) -> Optional[int]:
-        """Extrait le délai en mois du message - VERSION AMÉLIORÉE V12"""
+        """Extrait le délai en mois du message - VERSION ULTRA RENFORCÉE"""
         message_lower = message.lower()
         
-        # Patterns pour extraire les délais en mois
-        month_patterns = [
-            r'(\d+)\s*mois',
-            r'il y a\s*(\d+)\s*mois',
-            r'ça fait\s*(\d+)\s*mois',
-            r'depuis\s*(\d+)\s*mois',
-            r'(\d+)\s*mois que'
+        logger.info(f"🕐 ANALYSE DÉLAI: '{message}'")
+        
+        # PATTERNS ULTRA RENFORCÉS
+        delay_patterns = [
+            # Patterns avec préfixes
+            r'(?:il y a|depuis|ça fait|ca fait)\s*(\d+)\s*mois',
+            r'(?:il y a|depuis|ça fait|ca fait)\s*(\d+)\s*semaines?',
+            r'(?:il y a|depuis|ça fait|ca fait)\s*(\d+)\s*jours?',
+            
+            # Patterns terminaison
+            r'terminé\s+il y a\s+(\d+)\s*(mois|semaines?|jours?)',
+            r'fini\s+il y a\s+(\d+)\s*(mois|semaines?|jours?)',
+            
+            # Patterns avec "que"
+            r'(\d+)\s*(mois|semaines?|jours?)\s+que',
+            r'(\d+)\s*(mois|semaines?|jours?)\s*que',
+            
+            # Patterns simples
+            r'fait\s+(\d+)\s*(mois|semaines?|jours?)',
+            r'depuis\s+(\d+)\s*(mois|semaines?|jours?)',
+            
+            # NOUVEAUX PATTERNS PLUS FLEXIBLES
+            r'(\d+)\s*(mois|semaines?|jours?)$',
+            r'\b(\d+)\s*(mois|semaines?|jours?)\b',
+            r'\s+(\d+)\s*(mois|semaines?|jours?)\s',
+            
+            # PATTERNS SANS UNITÉ (assume mois par défaut)
+            r'il y a\s+(\d+)(?!\s*(?:mois|semaines?|jours?))',
+            r'ça fait\s+(\d+)(?!\s*(?:mois|semaines?|jours?))',
+            r'depuis\s+(\d+)(?!\s*(?:mois|semaines?|jours?))'
         ]
         
-        for pattern in month_patterns:
+        for pattern in delay_patterns:
             match = re.search(pattern, message_lower)
             if match:
-                months = int(match.group(1))
-                logger.info(f"📅 Délai détecté: {months} mois")
+                number = int(match.group(1))
+                
+                # Déterminer l'unité
+                unit = "mois"  # défaut
+                if len(match.groups()) > 1 and match.group(2):
+                    unit = match.group(2)
+                
+                # Conversion en mois
+                if 'semaine' in unit:
+                    months = max(1, round(number / 4.33))
+                    logger.info(f"🕐 Délai détecté: {number} semaines = {months} mois")
+                elif 'jour' in unit:
+                    months = max(1, round(number / 30.0))
+                    logger.info(f"🕐 Délai détecté: {number} jours = {months} mois")
+                else:
+                    months = number
+                    logger.info(f"🕐 Délai détecté: {number} mois")
+                
                 return months
         
-        # Patterns pour extraire les délais en semaines (convertir en mois)
-        week_patterns = [
-            r'(\d+)\s*semaines?',
-            r'il y a\s*(\d+)\s*semaines?',
-            r'ça fait\s*(\d+)\s*semaines?',
-            r'depuis\s*(\d+)\s*semaines?'
-        ]
-        
-        for pattern in week_patterns:
-            match = re.search(pattern, message_lower)
-            if match:
-                weeks = int(match.group(1))
-                # Convertir en mois (4.33 semaines = 1 mois)
-                months = round(weeks / 4.33, 1)
-                logger.info(f"📅 Délai détecté: {weeks} semaines = {months} mois")
-                return int(months) if months >= 1 else 0
-        
-        # Patterns pour extraire les délais en jours (convertir en mois)
-        day_patterns = [
-            r'(\d+)\s*jours?',
-            r'il y a\s*(\d+)\s*jours?',
-            r'ça fait\s*(\d+)\s*jours?',
-            r'depuis\s*(\d+)\s*jours?'
-        ]
-        
-        for pattern in day_patterns:
-            match = re.search(pattern, message_lower)
-            if match:
-                days = int(match.group(1))
-                # Convertir en mois (30 jours = 1 mois)
-                months = round(days / 30.0, 1)
-                logger.info(f"📅 Délai détecté: {days} jours = {months} mois")
-                return int(months) if months >= 1 else 0
-        
+        logger.warning(f"❌ Aucun délai détecté dans: '{message}'")
         return None
     
     @staticmethod
@@ -417,8 +487,8 @@ class MessageProcessor:
         
         # Liste des mots agressifs avec leurs contextes d'exclusion
         aggressive_patterns = [
-            ("merde", []), # Pas d'exclusion
-            ("nul", ["nul part", "nulle part"]), # Exclure "nul part"
+            ("merde", []),  # Pas d'exclusion
+            ("nul", ["nul part", "nulle part"]),  # Exclure "nul part"
             ("énervez", []),
             ("batards", []),
             ("putain", []),
@@ -450,19 +520,19 @@ class MessageProcessor:
     
     @staticmethod
     def detect_priority_rules(user_message: str, matched_bloc_response: str, conversation_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Applique les règles de priorité avec prise en compte du contexte - VERSION V12 AMÉLIORÉE"""
+        """Applique les règles de priorité avec prise en compte du contexte - VERSION V13 ULTRA CORRIGÉE"""
         
         message_lower = user_message.lower()
         
-        logger.info(f"🔧 PRIORITY DETECTION V12: user_message='{user_message}', has_bloc_response={bool(matched_bloc_response)}")
+        logger.info(f"🎯 PRIORITY DETECTION V13 ULTRA CORRIGÉE: user_message='{user_message}', has_bloc_response={bool(matched_bloc_response)}")
         
-        # 🚨 ÉTAPE 0.1: DÉTECTION PRIORITAIRE FINANCEMENT + DÉLAI (TOUS TYPES)
-        financing_indicators = ["cpf", "opco", "direct", "financé", "financement", "payé", "entreprise"]
-        delay_indicators = ["mois", "semaines", "jours", "il y a", "ça fait", "depuis", "terminé", "fini"]
-
+        # 🎯 ÉTAPE 0.1: DÉTECTION PRIORITAIRE FINANCEMENT + DÉLAI (TOUS TYPES) - ULTRA RENFORCÉE
+        financing_indicators = ["cpf", "opco", "direct", "financé", "finance", "financement", "payé", "paye", "entreprise", "personnel", "seul"]
+        delay_indicators = ["mois", "semaines", "jours", "il y a", "ça fait", "ca fait", "depuis", "terminé", "fini", "fait"]
+        
         has_financing = any(word in message_lower for word in financing_indicators)
         has_delay = any(word in message_lower for word in delay_indicators)
-
+        
         if has_financing and has_delay:
             financing_type = PaymentContextProcessor.extract_financing_type(user_message)
             delay_months = PaymentContextProcessor.extract_time_delay(user_message)
@@ -499,7 +569,7 @@ Tu veux que je transmette ta demande ? 😊""",
                         "escalade_type": "admin"
                     }
                 
-                # OPCO avec délai - NOUVEAU
+                # OPCO avec délai - NOUVEAU RENFORCÉ
                 elif financing_type == "OPCO" and delay_months >= 2:
                     return {
                         "use_matched_bloc": False,
@@ -536,7 +606,7 @@ Tu veux que je transmette ta demande pour vérification ? 😊""",
                         "escalade_type": "admin"
                     }
                 
-                # Financement direct avec délai - NOUVEAU  
+                # Financement direct avec délai - NOUVEAU RENFORCÉ
                 elif financing_type == "direct":
                     # Convertir en jours pour le calcul (délai normal = 7 jours)
                     delay_days = delay_months * 30  # Approximation
@@ -563,7 +633,7 @@ On te tiendra informé rapidement ✅""",
                     else:  # Délai normal
                         return {
                             "use_matched_bloc": False,
-                            "priority_detected": "DIRECT_DELAI_NORMAL", 
+                            "priority_detected": "DIRECT_DELAI_NORMAL",
                             "response": """Pour un financement direct, le délai normal est de 7 jours après la fin de formation et réception du dossier complet 📋
 
 Ton dossier est encore dans les délais normaux ⏰
@@ -574,7 +644,7 @@ Tu veux que je transmette ta demande ? 😊""",
                             "context": conversation_context,
                             "escalade_type": "admin"
                         }
-
+        
         # ✅ ÉTAPE 0.2: NOUVELLE - Détection des demandes d'étapes ambassadeur
         if conversation_context.get("awaiting_steps_info") or conversation_context.get("affiliation_context_detected"):
             how_it_works_patterns = [
@@ -612,7 +682,6 @@ Tu veux qu'on t'aide à démarrer ou tu envoies ta première liste ? 📝""",
                 }
         
         # ✅ ÉTAPE 1: PRIORITÉ ABSOLUE - Contexte paiement formation
-        # CORRECTION CRITIQUE : Vérifier d'abord si on est dans le contexte paiement
         if conversation_context.get("payment_context_detected"):
             logger.info("🎯 CONTEXTE PAIEMENT DÉTECTÉ - Analyse des réponses contextuelles")
             
@@ -622,7 +691,6 @@ Tu veux qu'on t'aide à démarrer ou tu envoies ta première liste ? 📝""",
             
             # CAS 1: Réponse "CPF" seule dans le contexte paiement
             if financing_type == "CPF" and not delay_months:
-                # Si la question de financement a été posée mais pas celle du timing
                 if conversation_context.get("financing_question_asked") and not conversation_context.get("timing_question_asked"):
                     return {
                         "use_matched_bloc": False,
@@ -672,7 +740,6 @@ On te tiendra informé dès qu'on a une réponse ✅""",
             
             is_fallback = any(indicator in matched_bloc_response.lower() for indicator in fallback_indicators)
             
-            # Si ce n'est pas un fallback ET qu'on n'est pas dans un contexte paiement/affiliation spécial
             if not is_fallback and not conversation_context.get("payment_context_detected") and not conversation_context.get("awaiting_steps_info"):
                 logger.info("✅ UTILISATION BLOC N8N - Bloc valide détecté par n8n")
                 return {
@@ -767,7 +834,7 @@ On te tiendra informé dès qu'on a une réponse ✅""",
                     return {
                         "use_matched_bloc": False,
                         "priority_detected": "PAIEMENT_SANS_BLOC",
-                        "response": """Salut 😊
+                        "response": """Salut 👋
 
 Je comprends que tu aies des questions sur le paiement 💰
 
@@ -795,7 +862,10 @@ Je vais faire suivre ta demande à notre équipe spécialisée qui te recontacte
                 "use_matched_bloc": False,
                 "priority_detected": "ESCALADE_AUTO",
                 "escalade_type": escalade_type,
-                "response": "🔄 ESCALADE AGENT ADMIN</br>🕐 Notre équipe traite les demandes du lundi au vendredi, de 9h à 17h (hors pause déjeuner).\n🔄 On te tiendra informé dès qu'on a du nouveau ✅",
+                "response": """🔄 ESCALADE AGENT ADMIN
+
+🕐 Notre équipe traite les demandes du lundi au vendredi, de 9h à 17h (hors pause déjeuner).
+👋 On te tiendra informé dès qu'on a du nouveau ✅""",
                 "context": conversation_context
             }
         
@@ -820,170 +890,181 @@ Je vais faire suivre ta demande à notre équipe spécialisée qui te recontacte
 
 @app.post("/")
 async def process_message(request: Request):
-    """Point d'entrée principal pour traiter les messages avec contexte"""
+    """Point d'entrée principal pour traiter les messages avec contexte - VERSION V13"""
     try:
         # Gestion robuste du parsing JSON
         try:
             body = await request.json()
         except json.JSONDecodeError as e:
-            # Si le JSON est mal formé, tenter de lire le contenu brut
             raw_body = await request.body()
             logger.error(f"JSON decode error: {str(e)}, raw body: {raw_body.decode('utf-8')[:500]}")
-            
-            # Essayer de nettoyer et re-parser
             try:
                 clean_body = raw_body.decode('utf-8').strip()
                 body = json.loads(clean_body)
             except:
                 raise HTTPException(status_code=400, detail=f"Invalid JSON format: {str(e)}")
-        
+
         # Logging amélioré pour debug
         logger.info(f"Received body type: {type(body)}")
         logger.info(f"Body keys: {list(body.keys()) if isinstance(body, dict) else 'Not a dict'}")
-        
+
         # Extraction des données avec fallbacks AMÉLIORÉE
         if isinstance(body, dict):
             user_message = body.get("message_original", body.get("message", ""))
             matched_bloc_response = body.get("matched_bloc_response", "")
             wa_id = body.get("wa_id", "default_wa_id")
         else:
-            # Si ce n'est pas un dict, essayer de traiter comme string
             user_message = str(body) if body else ""
             matched_bloc_response = ""
             wa_id = "fallback_wa_id"
-        
+
         logger.info(f"[{wa_id}] Processing: message='{user_message[:50]}...', has_bloc={bool(matched_bloc_response)}")
-        
+
         # Validation des entrées
         if not user_message or not user_message.strip():
             raise HTTPException(status_code=400, detail="Message is required")
-        
+
         # Nettoyage des données
         user_message = ResponseValidator.clean_response(user_message)
         matched_bloc_response = ResponseValidator.clean_response(matched_bloc_response)
-        
+
         # Gestion de la mémoire conversation
         if wa_id not in memory_store:
             memory_store[wa_id] = ConversationBufferMemory(
                 memory_key="history",
                 return_messages=True
             )
-        
+
         memory = memory_store[wa_id]
-        
+
         # Optimiser la mémoire en limitant la taille
         MemoryManager.trim_memory(memory, max_messages=15)
-        
+
         # Analyser le contexte de conversation avec le nouveau manager
         conversation_context = ConversationContextManager.analyze_conversation_context(user_message, memory)
-        
+
         # Résumé mémoire pour logs
         memory_summary = MemoryManager.get_memory_summary(memory)
-        
+
         logger.info(f"[{wa_id}] Conversation context: {conversation_context}")
         logger.info(f"[{wa_id}] Memory summary: {memory_summary}")
-        
+
         # Ajouter le message utilisateur à la mémoire
         memory.chat_memory.add_user_message(user_message)
-        
+
         # Application des règles de priorité avec contexte
         priority_result = MessageProcessor.detect_priority_rules(
             user_message,
             matched_bloc_response,
             conversation_context
         )
-        
+
         # Construction de la réponse selon la priorité et le contexte
         final_response = None
         response_type = "unknown"
         escalade_required = False
-        
+
         if priority_result.get("use_matched_bloc") and priority_result.get("response"):
             final_response = priority_result["response"]
             response_type = "exact_match_enforced"
             escalade_required = False
-        
+
         elif priority_result.get("priority_detected") == "N8N_BLOC_DETECTED":
             final_response = priority_result["response"]
             response_type = "n8n_bloc_used"
             escalade_required = False
-        
+
         elif priority_result.get("priority_detected") == "N8N_BLOC_FALLBACK":
             final_response = priority_result["response"]
             response_type = "n8n_bloc_fallback"
             escalade_required = False
-        
+
         elif priority_result.get("priority_detected") == "CPF_DELAI_DEPASSE_FILTRAGE":
             final_response = priority_result["response"]
             response_type = "cpf_delay_filtering"
             escalade_required = False
-        
+
         elif priority_result.get("priority_detected") == "CPF_DELAI_NORMAL":
             final_response = priority_result["response"]
             response_type = "cpf_delay_normal"
             escalade_required = False
-        
-        elif priority_result.get("priority_detected") == "AFFILIATION_STEPS_REQUEST":
-            final_response = priority_result["response"]
-            response_type = "affiliation_steps_provided"
-            escalade_required = False
-        
-        elif priority_result.get("priority_detected") == "PAIEMENT_CPF_DEMANDE_TIMING":
-            final_response = priority_result["response"]
-            response_type = "cpf_timing_request"
-            escalade_required = False
-        
-        elif priority_result.get("priority_detected") == "CPF_BLOQUE_CONFIRME":
-            final_response = priority_result["response"]
-            response_type = "cpf_blocked_confirmed"
-            escalade_required = False
-        
+
         elif priority_result.get("priority_detected") == "OPCO_DELAI_DEPASSE":
             final_response = priority_result["response"]
             response_type = "opco_delay_exceeded"
             escalade_required = True
-        
+
+        elif priority_result.get("priority_detected") == "OPCO_DELAI_NORMAL":
+            final_response = priority_result["response"]
+            response_type = "opco_delay_normal"
+            escalade_required = False
+
+        elif priority_result.get("priority_detected") == "DIRECT_DELAI_DEPASSE":
+            final_response = priority_result["response"]
+            response_type = "direct_delay_exceeded"
+            escalade_required = True
+
+        elif priority_result.get("priority_detected") == "DIRECT_DELAI_NORMAL":
+            final_response = priority_result["response"]
+            response_type = "direct_delay_normal"
+            escalade_required = False
+
+        elif priority_result.get("priority_detected") == "AFFILIATION_STEPS_REQUEST":
+            final_response = priority_result["response"]
+            response_type = "affiliation_steps_provided"
+            escalade_required = False
+
+        elif priority_result.get("priority_detected") == "PAIEMENT_CPF_DEMANDE_TIMING":
+            final_response = priority_result["response"]
+            response_type = "cpf_timing_request"
+            escalade_required = False
+
+        elif priority_result.get("priority_detected") == "CPF_BLOQUE_CONFIRME":
+            final_response = priority_result["response"]
+            response_type = "cpf_blocked_confirmed"
+            escalade_required = False
+
         elif priority_result.get("priority_detected") == "DEMANDE_DATE_FORMATION":
             final_response = priority_result["response"]
             response_type = "asking_formation_date"
             escalade_required = False
-        
+
         elif priority_result.get("priority_detected") == "AGRESSIVITE":
             final_response = priority_result["response"]
             response_type = "agressivite_detected"
             escalade_required = False
-        
+
         elif priority_result.get("priority_detected") == "FOLLOW_UP_CONVERSATION":
             final_response = None  # Sera géré par l'IA
             response_type = "follow_up_ai_handled"
             escalade_required = False
-        
+
         elif priority_result.get("priority_detected") == "PAIEMENT_SUIVI":
             final_response = None  # Sera géré par l'IA
             response_type = "paiement_suivi_ai_handled"
             escalade_required = False
-        
+
         elif priority_result.get("priority_detected") == "ESCALADE_AUTO":
             final_response = priority_result["response"]
             response_type = "auto_escalade"
             escalade_required = True
-        
+
         elif priority_result.get("priority_detected") == "PAIEMENT_SANS_BLOC":
             final_response = priority_result["response"]
             response_type = "paiement_fallback"
             escalade_required = True
-        
+
         else:
             # Utiliser l'IA pour une réponse contextuelle ou fallback
             final_response = None
             response_type = "ai_contextual_response"
             escalade_required = priority_result.get("use_ai", False)
-        
+
         # Si pas de réponse finale, utiliser un fallback
         if final_response is None:
             # Adapter le fallback selon le contexte
             if conversation_context["needs_greeting"]:
-                final_response = """Salut 😊
+                final_response = """Salut 👋
 
 Je vais faire suivre ta demande à notre équipe pour qu'elle puisse t'aider au mieux 😊
 
@@ -996,17 +1077,17 @@ En attendant, peux-tu me préciser un peu plus ce que tu recherches ?"""
 
 🕐 Notre équipe est disponible du lundi au vendredi, de 9h à 17h.
 On te tiendra informé dès que possible ✅"""
-            
+
             response_type = "fallback_with_context"
             escalade_required = True
-        
+
         # Ajout à la mémoire seulement si on a une réponse finale
         if final_response:
             memory.chat_memory.add_ai_message(final_response)
-        
+
         # Optimiser la mémoire après ajout
         MemoryManager.trim_memory(memory, max_messages=15)
-        
+
         # Construction de la réponse finale avec contexte
         response_data = {
             "matched_bloc_response": final_response,
@@ -1021,22 +1102,26 @@ On te tiendra informé dès que possible ✅"""
             "conversation_context": conversation_context,
             "memory_summary": memory_summary
         }
-        
+
         logger.info(f"[{wa_id}] Response generated: type={response_type}, escalade={escalade_required}, memory={memory_summary}")
-        
+
         return response_data
-    
+
     except HTTPException:
         # Re-raise HTTP exceptions
         raise
-    
+
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}")
         logger.error(f"Error type: {type(e)}")
-        
+
         # Retourner une réponse de fallback au lieu d'une erreur
         return {
-            "matched_bloc_response": "Salut 😊</br>Je rencontre un petit problème technique. Notre équipe va regarder ça et te recontacter rapidement ! 😊</br>🕐 Horaires : Lundi-Vendredi, 9h-17h",
+            "matched_bloc_response": """Salut 😊
+
+Je rencontre un petit problème technique. Notre équipe va regarder ça et te recontacter rapidement ! 😊
+
+🕐 Horaires : Lundi-Vendredi, 9h-17h""",
             "memory": "",
             "escalade_required": True,
             "escalade_type": "technique",
