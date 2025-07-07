@@ -663,45 +663,6 @@ Tu veux que je transmette ta demande ? 😊""",
                             "context": conversation_context,
                             "escalade_type": "admin"
                         }
-                
-                # Financement direct avec délai - NOUVEAU RENFORCÉ
-                elif financing_type == "direct":
-                    # Convertir en jours pour le calcul (délai normal = 7 jours)
-                    delay_days = delay_months * 30  # Approximation
-                    
-                    if delay_days > 7:  # Plus de 7 jours = anormal pour financement direct
-                        return {
-                            "use_matched_bloc": False,
-                            "priority_detected": "DIRECT_DELAI_DEPASSE",
-                            "response": """Merci pour ta réponse 🙏
-
-Pour un financement direct, le délai normal est de 7 jours après fin de formation + réception du dossier complet 📋
-
-Vu que cela fait plus que le délai habituel, je vais faire suivre ta demande à notre équipe pour vérification immédiate.
-
-👉 Je transmets ton dossier dès maintenant 📋
-
-🔄 ESCALADE AGENT ADMIN
-
-🕐 Notre équipe traite les demandes du lundi au vendredi, de 9h à 17h (hors pause déjeuner).
-On te tiendra informé rapidement ✅""",
-                            "context": conversation_context,
-                            "escalade_type": "admin"
-                        }
-                    else:  # Délai normal
-                        return {
-                            "use_matched_bloc": False,
-                            "priority_detected": "DIRECT_DELAI_NORMAL",
-                            "response": """Pour un financement direct, le délai normal est de 7 jours après la fin de formation et réception du dossier complet 📋
-
-Ton dossier est encore dans les délais normaux ⏰
-
-Si tu as des questions spécifiques sur ton dossier, je peux faire suivre à notre équipe ✅
-
-Tu veux que je transmette ta demande ? 😊""",
-                            "context": conversation_context,
-                            "escalade_type": "admin"
-                        }
         
         # ✅ ÉTAPE 0.2: NOUVELLE - Détection des demandes d'étapes ambassadeur
         if conversation_context.get("awaiting_steps_info") or conversation_context.get("affiliation_context_detected"):
