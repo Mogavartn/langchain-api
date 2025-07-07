@@ -571,12 +571,38 @@ Tu veux que je transmette ta demande ? 😊""",
                         "escalade_type": "admin"
                     }
                 
+                # TROUVE CETTE SECTION OPCO (lignes ~620-660) ET REMPLACE-LA :
+
                 # OPCO avec délai - CORRECTION CRITIQUE
-                elif financing_type == "OPCO" and delay_months >= 2:
-                    return {
-                        "use_matched_bloc": False,
-                        "priority_detected": "OPCO_DELAI_DEPASSE",
-                        "response": """Merci pour ta réponse 🙏
+                elif financing_type == "OPCO":
+                    # CORRECTION: Calculer en jours réels pour OPCO aussi
+                    delay_days = None
+                    
+                    # Recalculer le délai en jours selon l'unité originale
+                    if 'jour' in user_message.lower():
+                        # Extraire directement les jours
+                        day_match = re.search(r'(\d+)\s*jours?', message_lower)
+                        if day_match:
+                            delay_days = int(day_match.group(1))
+                    elif 'semaine' in user_message.lower():
+                        # Extraire les semaines et convertir en jours
+                        week_match = re.search(r'(\d+)\s*semaines?', message_lower)
+                        if week_match:
+                            delay_days = int(week_match.group(1)) * 7
+                    else:
+                        # Pour les mois, convertir en jours
+                        delay_days = delay_months * 30
+                    
+                    # Convertir en mois pour comparaison (seuil OPCO = 2 mois = 60 jours)
+                    delay_months_real = delay_days / 30 if delay_days else delay_months
+                    
+                    logger.info(f"🕐 CALCUL OPCO: {delay_days} jours = {delay_months_real:.2f} mois (seuil: 2 mois)")
+                    
+                    if delay_months_real >= 2:  # Plus de 2 mois = escalade
+                        return {
+                            "use_matched_bloc": False,
+                            "priority_detected": "OPCO_DELAI_DEPASSE",
+                            "response": """Merci pour ta réponse 🙏
 
 Pour un financement via un OPCO, le délai moyen est de 2 mois. Certains dossiers peuvent aller jusqu'à 6 mois ⏳
 
@@ -588,14 +614,14 @@ Mais vu que cela fait plus de 2 mois, on préfère ne pas te faire attendre plus
 
 🕐 Notre équipe traite les demandes du lundi au vendredi, de 9h à 17h (hors pause déjeuner).
 On te tiendra informé dès qu'on a une réponse ✅""",
-                        "context": conversation_context,
-                        "escalade_type": "admin"
-                    }
-                elif financing_type == "OPCO" and delay_months < 2:
-                    return {
-                        "use_matched_bloc": False,
-                        "priority_detected": "OPCO_DELAI_NORMAL",
-                        "response": """Pour un financement OPCO, le délai moyen est de 2 mois après la fin de formation 📋
+                            "context": conversation_context,
+                            "escalade_type": "admin"
+                        }
+                    else:  # Délai normal (< 2 mois)
+                        return {
+                            "use_matched_bloc": False,
+                            "priority_detected": "OPCO_DELAI_NORMAL",
+                            "response": """Pour un financement OPCO, le délai moyen est de 2 mois après la fin de formation 📋
 
 Ton dossier est encore dans les délais normaux ⏰
 
@@ -604,9 +630,9 @@ Certains dossiers peuvent prendre jusqu'à 6 mois selon l'organisme.
 Si tu as des questions spécifiques, je peux faire suivre à notre équipe ✅
 
 Tu veux que je transmette ta demande pour vérification ? 😊""",
-                        "context": conversation_context,
-                        "escalade_type": "admin"
-                    }
+                            "context": conversation_context,
+                            "escalade_type": "admin"
+                        }
                 
                 # Financement direct avec délai - CORRECTION CRITIQUE
                 elif financing_type == "direct":
