@@ -403,12 +403,14 @@ class PaymentContextProcessor:
                 if len(match.groups()) > 1 and match.group(2):
                     unit = match.group(2)
                 
-                # Conversion en mois
+                # Conversion en mois - CORRECTION CRITIQUE
                 if 'semaine' in unit:
-                    months = max(1, round(number / 4.33))
+                    # CORRECTION: Ne pas forcer minimum 1 mois
+                    months = round(number / 4.33, 2)  # Garder les décimales
                     logger.info(f"🕐 Délai détecté: {number} semaines = {months} mois")
                 elif 'jour' in unit:
-                    months = max(1, round(number / 30.0))
+                    # CORRECTION: Ne pas forcer minimum 1 mois
+                    months = round(number / 30.0, 2)  # Garder les décimales  
                     logger.info(f"🕐 Délai détecté: {number} jours = {months} mois")
                 else:
                     months = number
@@ -520,13 +522,13 @@ class MessageProcessor:
     
     @staticmethod
     def detect_priority_rules(user_message: str, matched_bloc_response: str, conversation_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Applique les règles de priorité avec prise en compte du contexte - VERSION V13 ULTRA CORRIGÉE"""
+        """Applique les règles de priorité avec prise en compte du contexte - VERSION V13 CORRIGÉE DÉLAIS"""
         
         message_lower = user_message.lower()
         
-        logger.info(f"🎯 PRIORITY DETECTION V13 ULTRA CORRIGÉE: user_message='{user_message}', has_bloc_response={bool(matched_bloc_response)}")
+        logger.info(f"🎯 PRIORITY DETECTION V13 DÉLAIS CORRIGÉS: user_message='{user_message}', has_bloc_response={bool(matched_bloc_response)}")
         
-        # 🎯 ÉTAPE 0.1: DÉTECTION PRIORITAIRE FINANCEMENT + DÉLAI (TOUS TYPES) - ULTRA RENFORCÉE
+        # 🎯 ÉTAPE 0.1: DÉTECTION PRIORITAIRE FINANCEMENT + DÉLAI (TOUS TYPES) - DÉLAIS CORRIGÉS
         financing_indicators = ["cpf", "opco", "direct", "financé", "finance", "financement", "payé", "paye", "entreprise", "personnel", "seul"]
         delay_indicators = ["mois", "semaines", "jours", "il y a", "ça fait", "ca fait", "depuis", "terminé", "fini", "fait"]
         
@@ -540,7 +542,7 @@ class MessageProcessor:
             logger.info(f"🎯 FINANCEMENT + DÉLAI DÉTECTÉ: {financing_type} / {delay_months} mois équivalent")
             
             if financing_type and delay_months is not None:
-                # CPF avec délai
+                # CPF avec délai - INCHANGÉ
                 if financing_type == "CPF" and delay_months >= 2:
                     return {
                         "use_matched_bloc": False,
@@ -569,7 +571,7 @@ Tu veux que je transmette ta demande ? 😊""",
                         "escalade_type": "admin"
                     }
                 
-                # OPCO avec délai - NOUVEAU RENFORCÉ
+                # OPCO avec délai - CORRECTION CRITIQUE
                 elif financing_type == "OPCO" and delay_months >= 2:
                     return {
                         "use_matched_bloc": False,
@@ -605,6 +607,62 @@ Tu veux que je transmette ta demande pour vérification ? 😊""",
                         "context": conversation_context,
                         "escalade_type": "admin"
                     }
+                
+                # Financement direct avec délai - CORRECTION CRITIQUE
+                elif financing_type == "direct":
+                    # CORRECTION: Calculer en jours réels, pas en mois convertis
+                    delay_days = None
+                    
+                    # Recalculer le délai en jours selon l'unité originale
+                    if 'jour' in user_message.lower():
+                        # Extraire directement les jours
+                        day_match = re.search(r'(\d+)\s*jours?', message_lower)
+                        if day_match:
+                            delay_days = int(day_match.group(1))
+                    elif 'semaine' in user_message.lower():
+                        # Extraire les semaines et convertir en jours
+                        week_match = re.search(r'(\d+)\s*semaines?', message_lower)
+                        if week_match:
+                            delay_days = int(week_match.group(1)) * 7
+                    else:
+                        # Pour les mois, convertir en jours
+                        delay_days = delay_months * 30
+                    
+                    logger.info(f"🕐 CALCUL DIRECT: {delay_days} jours (seuil: 7 jours)")
+                    
+                    if delay_days and delay_days > 7:  # Plus de 7 jours = anormal
+                        return {
+                            "use_matched_bloc": False,
+                            "priority_detected": "DIRECT_DELAI_DEPASSE",
+                            "response": """Merci pour ta réponse 🙏
+
+Pour un financement direct, le délai normal est de 7 jours après fin de formation + réception du dossier complet 📋
+
+Vu que cela fait plus que le délai habituel, je vais faire suivre ta demande à notre équipe pour vérification immédiate.
+
+👉 Je transmets ton dossier dès maintenant 📋
+
+🔄 ESCALADE AGENT ADMIN
+
+🕐 Notre équipe traite les demandes du lundi au vendredi, de 9h à 17h (hors pause déjeuner).
+On te tiendra informé rapidement ✅""",
+                            "context": conversation_context,
+                            "escalade_type": "admin"
+                        }
+                    else:  # Délai normal (≤ 7 jours)
+                        return {
+                            "use_matched_bloc": False,
+                            "priority_detected": "DIRECT_DELAI_NORMAL",
+                            "response": """Pour un financement direct, le délai normal est de 7 jours après la fin de formation et réception du dossier complet 📋
+
+Ton dossier est encore dans les délais normaux ⏰
+
+Si tu as des questions spécifiques sur ton dossier, je peux faire suivre à notre équipe ✅
+
+Tu veux que je transmette ta demande ? 😊""",
+                            "context": conversation_context,
+                            "escalade_type": "admin"
+                        }
                 
                 # Financement direct avec délai - NOUVEAU RENFORCÉ
                 elif financing_type == "direct":
