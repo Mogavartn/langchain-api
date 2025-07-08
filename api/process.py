@@ -11,7 +11,7 @@ import re
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="JAK Company AI Agent API", version="13.0")
+app = FastAPI(title="JAK Company AI Agent API", version="14.0")
 
 # Configuration CORS pour permettre les tests locaux
 app.add_middleware(
@@ -113,22 +113,20 @@ async def health_check():
     """Endpoint de santé pour vérifier que l'API fonctionne"""
     return {
         "status": "healthy",
-        "version": "13.0",
+        "version": "14.0",
         "openai_configured": bool(os.environ.get("OPENAI_API_KEY")),
         "active_sessions": len(memory_store),
         "memory_type": "ConversationBufferMemory (Optimized)",
         "memory_optimization": "Auto-trim to 15 messages",
         "improvements": [
-            "VERSION 13: CORRECTION ULTRA RENFORCÉE OPCO/DIRECT",
-            "NOUVEAU: Détection OPCO avec jours/semaines",
-            "NOUVEAU: Détection financement direct ultra-renforcée", 
-            "NOUVEAU: Conversion automatique jours/semaines → mois",
-            "NOUVEAU: Patterns flexibles et contextuels",
-            "NOUVEAU: Logs détaillés pour debugging",
-            "Fixed: OPCO il y a X jours/semaines",
-            "Fixed: en direct il y a X jours/semaines",
-            "Fixed: j'ai payé moi même il y a X",
-            "Enhanced: PaymentContextProcessor ultra-renforcé"
+            "VERSION 14: FIX CRITIQUE DÉLAIS CPF - CALCUL EN JOURS RÉELS",
+            "NOUVEAU: Seuil CPF correct (45 jours, pas 60)",
+            "NOUVEAU: Conversion précise semaines/jours → jours",
+            "NOUVEAU: Logs ultra-détaillés pour debugging délais",
+            "NOUVEAU: Bloc CPF_DELAI_NORMAL pour délais acceptables",
+            "Fixed: 'cpf il y a 2 semaines' → délai normal (14 jours < 45)",
+            "Fixed: 'cpf il y a 8 semaines' → délai dépassé (56 jours > 45)",
+            "Enhanced: PaymentContextProcessor avec calculs en jours"
         ]
     }
 
@@ -275,7 +273,7 @@ class ConversationContextManager:
         }
 
 class PaymentContextProcessor:
-    """Processeur spécialisé pour le contexte paiement formation - VERSION ULTRA CORRIGÉE"""
+    """Processeur spécialisé pour le contexte paiement formation - VERSION V14 DÉLAIS CORRIGÉS"""
     
     @staticmethod
     def extract_financing_type(message: str) -> Optional[str]:
@@ -522,13 +520,13 @@ class MessageProcessor:
     
     @staticmethod
     def detect_priority_rules(user_message: str, matched_bloc_response: str, conversation_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Applique les règles de priorité avec prise en compte du contexte - VERSION V13 CORRIGÉE DÉLAIS"""
+        """Applique les règles de priorité avec prise en compte du contexte - VERSION V14 DÉLAIS CPF CORRIGÉS"""
         
         message_lower = user_message.lower()
         
-        logger.info(f"🎯 PRIORITY DETECTION V13 DÉLAIS CORRIGÉS: user_message='{user_message}', has_bloc_response={bool(matched_bloc_response)}")
+        logger.info(f"🎯 PRIORITY DETECTION V14 DÉLAIS CPF CORRIGÉS: user_message='{user_message}', has_bloc_response={bool(matched_bloc_response)}")
         
-        # 🎯 ÉTAPE 0.1: DÉTECTION PRIORITAIRE FINANCEMENT + DÉLAI (TOUS TYPES) - DÉLAIS CORRIGÉS
+        # 🎯 ÉTAPE 0.1: DÉTECTION PRIORITAIRE FINANCEMENT + DÉLAI (TOUS TYPES) - DÉLAIS CPF CORRIGÉS
         financing_indicators = ["cpf", "opco", "direct", "financé", "finance", "financement", "payé", "paye", "entreprise", "personnel", "seul"]
         delay_indicators = ["mois", "semaines", "jours", "il y a", "ça fait", "ca fait", "depuis", "terminé", "fini", "fait"]
         
@@ -542,37 +540,64 @@ class MessageProcessor:
             logger.info(f"🎯 FINANCEMENT + DÉLAI DÉTECTÉ: {financing_type} / {delay_months} mois équivalent")
             
             if financing_type and delay_months is not None:
-                # CPF avec délai - INCHANGÉ
-                if financing_type == "CPF" and delay_months >= 2:
-                    return {
-                        "use_matched_bloc": False,
-                        "priority_detected": "CPF_DELAI_DEPASSE_FILTRAGE",
-                        "response": """Juste avant que je transmette ta demande 🙏
+                # CPF avec délai - VERSION V14 CORRIGÉE AVEC CALCUL EN JOURS
+                if financing_type == "CPF":
+                    # CALCUL EN JOURS RÉELS, PAS EN MOIS CONVERTIS
+                    delay_days = None
+                    
+                    # Rechercher l'unité originale dans le message
+                    if 'jour' in user_message.lower():
+                        day_match = re.search(r'(\d+)\s*jours?', user_message.lower())
+                        if day_match:
+                            delay_days = int(day_match.group(1))
+                            logger.info(f"📅 CPF: {delay_days} jours détectés")
+                    elif 'semaine' in user_message.lower():
+                        week_match = re.search(r'(\d+)\s*semaines?', user_message.lower())
+                        if week_match:
+                            weeks = int(week_match.group(1))
+                            delay_days = weeks * 7
+                            logger.info(f"📅 CPF: {weeks} semaines = {delay_days} jours")
+                    else:
+                        # Si c'est en mois, convertir (delay_months vient de extract_time_delay)
+                        if delay_months:
+                            delay_days = int(delay_months * 30)
+                            logger.info(f"📅 CPF: {delay_months} mois = {delay_days} jours")
+                    
+                    # SEUIL CPF: 45 jours (délai minimum officiel)
+                    logger.info(f"🎯 CPF SEUIL CHECK: {delay_days} jours vs 45 jours")
+                    
+                    if delay_days and delay_days >= 45:
+                        # Délai dépassé → Filtrage
+                        logger.info("⚠️ CPF: Délai dépassé - Filtrage bloqué")
+                        return {
+                            "use_matched_bloc": False,
+                            "priority_detected": "CPF_DELAI_DEPASSE_FILTRAGE",
+                            "response": """Juste avant que je transmette ta demande 🙏
 
 Est-ce que tu as déjà été informé par l'équipe que ton dossier CPF faisait partie des quelques cas bloqués par la Caisse des Dépôts ?
 
 👉 Si oui, je te donne directement toutes les infos liées à ce blocage.
 Sinon, je fais remonter ta demande à notre équipe pour vérification ✅""",
-                        "context": conversation_context,
-                        "awaiting_cpf_info": True
-                    }
-                elif financing_type == "CPF" and delay_months < 2:
-                    return {
-                        "use_matched_bloc": False,
-                        "priority_detected": "CPF_DELAI_NORMAL",
-                        "response": """Pour un financement CPF, le délai minimum est de 45 jours après réception des feuilles d'émargement signées 📋
+                            "context": conversation_context,
+                            "awaiting_cpf_info": True
+                        }
+                    else:
+                        # Délai normal → Rassurer
+                        logger.info("✅ CPF: Délai normal - Pas d'inquiétude")
+                        return {
+                            "use_matched_bloc": False,
+                            "priority_detected": "CPF_DELAI_NORMAL",
+                            "response": f"""Pour un financement CPF, le délai minimum est de 45 jours après réception des feuilles d'émargement signées 📅
 
-Ton dossier est encore dans les délais normaux ⏰
+Ton dossier est encore dans les délais normaux ⏰ (tu en es à environ {delay_days or 'quelques'} jours)
 
 Si tu as des questions spécifiques sur ton dossier, je peux faire suivre à notre équipe pour vérification ✅
 
 Tu veux que je transmette ta demande ? 😊""",
-                        "context": conversation_context,
-                        "escalade_type": "admin"
-                    }
+                            "context": conversation_context,
+                            "escalade_type": "admin"
+                        }
                 
-                # TROUVE CETTE SECTION OPCO (lignes ~620-660) ET REMPLACE-LA :
-
                 # OPCO avec délai - CORRECTION CRITIQUE
                 elif financing_type == "OPCO":
                     # CORRECTION: Calculer en jours réels pour OPCO aussi
@@ -935,7 +960,7 @@ Je vais faire suivre ta demande à notre équipe spécialisée qui te recontacte
 
 @app.post("/")
 async def process_message(request: Request):
-    """Point d'entrée principal pour traiter les messages avec contexte - VERSION V13"""
+    """Point d'entrée principal pour traiter les messages avec contexte - VERSION V14"""
     try:
         # Gestion robuste du parsing JSON
         try:
